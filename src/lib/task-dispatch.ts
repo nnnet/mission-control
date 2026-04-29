@@ -293,6 +293,140 @@ async function callClaudeDirectly(
   return { text, sessionId: null }
 }
 
+// ---------------------------------------------------------------------------
+// Direct OpenAI / OpenAI-compatible local dispatch — also gateway-free.
+//
+// The "local" provider path is intentionally generic: it speaks the OpenAI
+// `/v1/chat/completions` REST shape, which is what LMStudio, Ollama, vLLM and
+// liteLLM proxies all expose. Operators who run multiple local backends
+// behind a single liteLLM endpoint can point LOCAL_LLM_ENDPOINT at it and
+// route every "local model" request through one process.
+//
+// Model routing is done by prefix on the agent's `dispatchModel`:
+//   "openai/gpt-4o-mini", "gpt-4.1-mini", "o1-*", "o3-*"  → OpenAI cloud
+//   "local/<model>", "ollama/<model>", "lmstudio/<model>" → LOCAL_LLM_ENDPOINT
+//   anything else (incl. "claude-*")                      → Anthropic
+// ---------------------------------------------------------------------------
+
+type DirectProvider = 'anthropic' | 'openai' | 'local'
+
+function getOpenAIApiKey(): string | null {
+  return (process.env.OPENAI_API_KEY || '').trim() || null
+}
+
+/**
+ * OpenAI-compatible local endpoint. Defaults to LMStudio's stock listener on
+ * the docker host (`host.docker.internal:1234/v1`). Set LOCAL_LLM_ENDPOINT to
+ * point at Ollama (`http://host.docker.internal:11434/v1`), a liteLLM proxy
+ * (`http://litellm:4000`), or any other OpenAI-compatible service.
+ */
+function getLocalEndpoint(): string | null {
+  return (process.env.LOCAL_LLM_ENDPOINT || 'http://host.docker.internal:1234/v1').trim() || null
+}
+
+function getLocalApiKey(): string | null {
+  // Some liteLLM/proxy setups require a master key even for local routing.
+  return (process.env.LOCAL_LLM_API_KEY || '').trim() || null
+}
+
+function pickProvider(model: string): DirectProvider {
+  const m = model.toLowerCase()
+  if (m.startsWith('openai/') || m.startsWith('gpt-') || m.startsWith('o1-') || m.startsWith('o3-')) return 'openai'
+  if (m.startsWith('local/') || m.startsWith('ollama/') || m.startsWith('lmstudio/') || m.startsWith('litellm/')) return 'local'
+  return 'anthropic'
+}
+
+function stripProviderPrefix(model: string): string {
+  return model.replace(/^(openai|local|ollama|lmstudio|litellm|anthropic)\//, '')
+}
+
+function isDirectDispatchAvailable(provider?: DirectProvider): boolean {
+  if (provider === 'anthropic') return !!getAnthropicApiKey()
+  if (provider === 'openai') return !!getOpenAIApiKey()
+  if (provider === 'local') return !!getLocalEndpoint()
+  return !!getAnthropicApiKey() || !!getOpenAIApiKey() || !!getLocalEndpoint()
+}
+
+async function callOpenAICompatible(
+  task: DispatchableTask,
+  prompt: string,
+  endpoint: string,
+  apiKey: string | null,
+  model: string,
+  providerLabel: DirectProvider,
+): Promise<AgentResponseParsed> {
+  const soul = getAgentSoulContent(task)
+  const messages: Array<{ role: string; content: string }> = []
+  if (soul) messages.push({ role: 'system', content: soul })
+  messages.push({ role: 'user', content: prompt })
+
+  const body = { model, messages, max_tokens: 4096 }
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`
+
+  logger.info({ taskId: task.id, model, agent: task.agent_name, provider: providerLabel },
+    `Dispatching task via direct ${providerLabel} API`)
+
+  const res = await fetch(`${endpoint.replace(/\/$/, '')}/chat/completions`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  })
+
+  if (!res.ok) {
+    const errorBody = await res.text().catch(() => '')
+    throw new Error(`${providerLabel} API ${res.status}: ${errorBody.substring(0, 500)}`)
+  }
+
+  const data = await res.json() as {
+    choices?: Array<{ message?: { content?: string } }>
+    usage?: { prompt_tokens?: number; completion_tokens?: number }
+  }
+  const text = data.choices?.[0]?.message?.content?.trim() || null
+
+  if (data.usage) {
+    try {
+      const db = getDatabase()
+      const now = Math.floor(Date.now() / 1000)
+      db.prepare(`
+        INSERT INTO token_usage (model, session_id, input_tokens, output_tokens, total_tokens, cost, created_at, workspace_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        model,
+        `task-${task.id}`,
+        data.usage.prompt_tokens || 0,
+        data.usage.completion_tokens || 0,
+        (data.usage.prompt_tokens || 0) + (data.usage.completion_tokens || 0),
+        0,
+        now,
+        task.workspace_id,
+      )
+    } catch { /* non-fatal */ }
+  }
+
+  return { text, sessionId: null }
+}
+
+async function callOpenAIDirectly(task: DispatchableTask, prompt: string, model: string): Promise<AgentResponseParsed> {
+  const apiKey = getOpenAIApiKey()
+  if (!apiKey) throw new Error('OPENAI_API_KEY not set — cannot dispatch to OpenAI without gateway')
+  return callOpenAICompatible(task, prompt, 'https://api.openai.com/v1', apiKey, stripProviderPrefix(model), 'openai')
+}
+
+async function callLocalDirectly(task: DispatchableTask, prompt: string, model: string): Promise<AgentResponseParsed> {
+  const endpoint = getLocalEndpoint()
+  if (!endpoint) throw new Error('LOCAL_LLM_ENDPOINT not set — cannot dispatch to local model')
+  return callOpenAICompatible(task, prompt, endpoint, getLocalApiKey(), stripProviderPrefix(model), 'local')
+}
+
+async function callDirectly(task: DispatchableTask, prompt: string): Promise<AgentResponseParsed> {
+  const model = classifyDirectModel(task)
+  const provider = pickProvider(model)
+  if (provider === 'openai') return callOpenAIDirectly(task, prompt, model)
+  if (provider === 'local') return callLocalDirectly(task, prompt, model)
+  return callClaudeDirectly(task, prompt)
+}
+
 interface ReviewableTask {
   id: number
   title: string
@@ -403,16 +537,18 @@ export async function runAegisReviews(): Promise<{ ok: boolean; message: string 
       const prompt = buildReviewPrompt(task)
       let agentResponse: AgentResponseParsed
 
-      if (!isGatewayAvailable() && getAnthropicApiKey()) {
-        // Direct Claude API review — no gateway needed
+      if (!isGatewayAvailable() && isDirectDispatchAvailable()) {
+        // Direct API review — no gateway needed (Anthropic / OpenAI / local).
+        // Pass through agent_config so Aegis honors per-agent dispatchModel
+        // overrides and routes to the matching provider.
         const reviewTask: DispatchableTask = {
           id: task.id, title: task.title, description: task.description,
           status: 'quality_review', priority: 'high', assigned_to: 'aegis',
           workspace_id: task.workspace_id, agent_name: 'aegis', agent_id: 0,
-          agent_config: null, ticket_prefix: task.ticket_prefix,
+          agent_config: task.agent_config, ticket_prefix: task.ticket_prefix,
           project_ticket_no: task.project_ticket_no, project_id: null,
         }
-        agentResponse = await callClaudeDirectly(reviewTask, prompt)
+        agentResponse = await callDirectly(reviewTask, prompt)
       } else {
         // Resolve the gateway agent ID from config, falling back to assigned_to or default
         const reviewAgent = resolveGatewayAgentIdForReview(task)
@@ -695,11 +831,12 @@ export async function dispatchAssignedTasks(): Promise<{ ok: boolean; message: s
         : null
 
       let agentResponse: AgentResponseParsed
-      const useDirectApi = !isGatewayAvailable() && getAnthropicApiKey()
+      const useDirectApi = !isGatewayAvailable() && isDirectDispatchAvailable()
 
       if (useDirectApi && !targetSession) {
-        // Direct Claude API dispatch — no gateway needed
-        agentResponse = await callClaudeDirectly(task, prompt)
+        // Direct API dispatch — provider chosen by `dispatchModel` prefix
+        // (Anthropic / OpenAI / OpenAI-compatible local). No gateway needed.
+        agentResponse = await callDirectly(task, prompt)
       } else if (targetSession) {
         // Dispatch to a specific existing session via chat.send
         logger.info({ taskId: task.id, targetSession, agent: task.agent_name }, 'Dispatching task to targeted session')

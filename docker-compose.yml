@@ -18,8 +18,19 @@ services:
       - PATH=/home/nextjs/.local/bin:/home/nextjs/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       - HOME=/home/nextjs
       # MC's direct-API dispatch uses these (no gateway needed).
+      # Provider is picked by the agent's `dispatchModel` prefix:
+      #   `claude-*` / `anthropic/*`           → ANTHROPIC_API_KEY
+      #   `gpt-*` / `o1-*` / `o3-*` / `openai/*` → OPENAI_API_KEY
+      #   `local/*` / `ollama/*` / `lmstudio/*` / `litellm/*`
+      #                                        → LOCAL_LLM_ENDPOINT (+ optional
+      #                                          LOCAL_LLM_API_KEY)
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # OpenAI-compatible local endpoint. LMStudio default is shown; point at
+      # Ollama (`http://host.docker.internal:11434/v1`) or a liteLLM proxy
+      # (`http://litellm:4000`) to fan out to multiple local backends.
+      - LOCAL_LLM_ENDPOINT=${LOCAL_LLM_ENDPOINT:-http://host.docker.internal:1234/v1}
+      - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-}
       # How MC interacts with a session that may have a live host `claude` CLI:
       #   coexist (default) — both write to the same jsonl, race possible
       #   block-active      — refuse with 409 if jsonl mtime < 60s ago
