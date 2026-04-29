@@ -1,0 +1,106 @@
+# Dev compose — bind-mounts the source tree so `pnpm dev` hot-reloads
+# without rebuilding the image. Use via `make dev`.
+#
+# When to rebuild the image (`make dev-build`):
+#   - package.json / pnpm-lock.yaml changed
+#   - Dockerfile.dev changed (added system tool, OS dep, etc.)
+#
+# Day-to-day code edits in src/, public/, messages/ — just hit save, the
+# next.js dev server picks them up.
+services:
+  mission-control-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: mission-control-dev:latest
+    container_name: mission-control-dev
+    ports:
+      - "${MC_PORT:-7012}:3000"
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - PATH=/home/nextjs/.local/bin:/home/nextjs/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - HOME=/home/nextjs
+      - OPENCLAW_GATEWAY_HOST=${OPENCLAW_GATEWAY_HOST:-host.docker.internal}
+      - OPENCLAW_GATEWAY_PORT=${OPENCLAW_GATEWAY_PORT:-18789}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - LOCAL_LLM_ENDPOINT=${LOCAL_LLM_ENDPOINT:-http://host.docker.internal:1234/v1}
+      - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-}
+      - MC_HOST_SESSION_MODE=${MC_HOST_SESSION_MODE:-coexist}
+      - NEXT_PUBLIC_CHAT_POLL_INTERVAL_MS=${NEXT_PUBLIC_CHAT_POLL_INTERVAL_MS:-1000}
+    env_file:
+      - path: .env
+        required: false
+    user: "1000:1000"
+    volumes:
+      # ── Source code: bind-mount, hot-reload ──
+      - ./src:/app/src:rw
+      - ./public:/app/public:rw
+      - ./messages:/app/messages:rw
+      - ./scripts:/app/scripts:ro
+      - ./next.config.js:/app/next.config.js:ro
+      - ./tailwind.config.js:/app/tailwind.config.js:ro
+      - ./postcss.config.js:/app/postcss.config.js:ro
+      - ./tsconfig.json:/app/tsconfig.json:ro
+      - ./eslint.config.mjs:/app/eslint.config.mjs:ro
+      # package.json + lock — pnpm checks them at startup; bind-mount so
+      # adding a dep with `pnpm add` on the host is reflected on next restart
+      # (still requires `make dev-build` if native modules change).
+      - ./package.json:/app/package.json:ro
+      - ./pnpm-lock.yaml:/app/pnpm-lock.yaml:ro
+
+      # ── Persistent state ──
+      # Share the production data volume so admin user, workspaces, projects,
+      # and agents created via `make up` are visible in `make dev` and vice
+      # versa. Stop one before starting the other (SQLite single-writer).
+      - mission-control_mc-data:/app/.data
+      # .next dev cache — keep across restarts so first paint is fast.
+      - mc-next-dev:/app/.next
+
+      # ── Host configs (same projection as production compose) ──
+      - ${HOME}/.local/bin:/home/nextjs/.local/bin:rw
+      - ${HOME}/.local/share/claude:/home/nextjs/.local/share/claude:rw
+      - ${HOME}/.bun:/home/nextjs/.bun:rw
+      - ${HOME}/.claude:/home/nextjs/.claude:rw
+      - ${HOME}/.claude.json:/home/nextjs/.claude.json:rw
+      - /mnt:/mnt:rw
+      - ${HOME}:${HOME}:rw
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    # Dev mode is permissive — keep rootfs writable so next.js can scribble
+    # its dev cache, .swc artifacts, etc. The hardened production compose
+    # remains read-only.
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '4.0'
+          pids: 1024
+
+    networks:
+      - mc-net-dev
+    restart: unless-stopped
+
+    # Run next directly instead of `pnpm dev` — the package.json `dev` script
+    # hardcodes `--hostname 127.0.0.1`, which would only listen on the loopback
+    # inside the container (unreachable from the host port mapping). Going
+    # through `pnpm exec` ensures we use the project's own next install.
+    command: ["pnpm", "exec", "next", "dev", "--hostname", "0.0.0.0", "--port", "3000"]
+
+volumes:
+  mission-control_mc-data:
+    external: true
+  mc-next-dev:
+
+networks:
+  mc-net-dev:
+    driver: bridge
