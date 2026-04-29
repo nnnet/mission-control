@@ -84,10 +84,21 @@ function clampTimestamp(ms: number): number {
   return ms
 }
 
+// Track which oversized files we've already warned about to avoid log spam.
+// scanClaudeSessions() runs every 30s; without this each big jsonl prints a
+// WARN every cycle. Reset on process restart.
+const warnedOversized = new Set<string>()
+
 async function parseSessionFile(filePath: string, projectSlug: string, fileMtimeMs: number, fileSizeBytes: number): Promise<SessionStats | null> {
   try {
     if (fileSizeBytes > MAX_SESSION_FILE_BYTES) {
-      logger.warn({ filePath, fileSizeBytes }, 'Skipping oversized Claude session file')
+      if (!warnedOversized.has(filePath)) {
+        warnedOversized.add(filePath)
+        logger.info(
+          { filePath, fileSizeBytes },
+          'Skipping oversized Claude session file (logged once per process)',
+        )
+      }
       return null
     }
 

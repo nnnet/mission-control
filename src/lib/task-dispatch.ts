@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 import { getDatabase, db_helpers } from './db'
 import { runOpenClaw } from './command'
 import { callOpenClawGateway } from './openclaw-gateway'
@@ -149,11 +151,25 @@ function getAnthropicApiKey(): string | null {
 }
 
 function isGatewayAvailable(): boolean {
-  // Gateway is available if OpenClaw is installed OR a gateway is registered in the DB
-  if (config.openclawHome) return true
+  // `config.openclawHome` defaults to `~/.openclaw` even when OpenClaw is not
+  // installed, so a truthy path string alone is not evidence that a gateway
+  // can actually be invoked. Require physical evidence:
+  //   - a real `openclaw.json` on disk (= an installed OpenClaw config), OR
+  //   - a registered gateway row whose status is healthy. We explicitly
+  //     reject `status = 'unknown'` because the onboarding flow seeds a
+  //     `primary` row pointing at `host.docker.internal:18789` regardless
+  //     of whether OpenClaw is actually running. Treating that seed row as
+  //     proof of availability would route every dispatch through
+  //     `runOpenClaw` and fail with `spawn openclaw ENOENT` on hosts that
+  //     don't have the binary. Require the row to have been pinged
+  //     successfully at least once (status in healthy set) before we trust
+  //     the gateway path.
+  if (config.openclawConfigPath && existsSync(config.openclawConfigPath)) return true
   try {
     const db = getDatabase()
-    const row = db.prepare('SELECT COUNT(*) as c FROM gateways').get() as { c: number } | undefined
+    const row = db.prepare(
+      "SELECT COUNT(*) as c FROM gateways WHERE status IN ('online', 'healthy', 'ready')"
+    ).get() as { c: number } | undefined
     return (row?.c ?? 0) > 0
   } catch {
     return false
@@ -340,11 +356,111 @@ function stripProviderPrefix(model: string): string {
   return model.replace(/^(openai|local|ollama|lmstudio|litellm|anthropic)\//, '')
 }
 
+/**
+ * The Claude Code CLI on the container's PATH (mounted from the host's
+ * `~/.local/bin`). When present and authenticated (host's `~/.claude.json`
+ * is bind-mounted in), we prefer it over the raw Anthropic API: it inherits
+ * the operator's existing login, plan, and rate limits without requiring
+ * an `ANTHROPIC_API_KEY` to be exported into the container.
+ */
+function isClaudeCliAvailable(): boolean {
+  try {
+    return existsSync('/home/nextjs/.local/bin/claude')
+      || existsSync('/usr/local/bin/claude')
+      || existsSync('/usr/bin/claude')
+  } catch { return false }
+}
+
 function isDirectDispatchAvailable(provider?: DirectProvider): boolean {
-  if (provider === 'anthropic') return !!getAnthropicApiKey()
+  if (provider === 'anthropic') return !!getAnthropicApiKey() || isClaudeCliAvailable()
   if (provider === 'openai') return !!getOpenAIApiKey()
   if (provider === 'local') return !!getLocalEndpoint()
-  return !!getAnthropicApiKey() || !!getOpenAIApiKey() || !!getLocalEndpoint()
+  return !!getAnthropicApiKey() || !!getOpenAIApiKey() || !!getLocalEndpoint() || isClaudeCliAvailable()
+}
+
+/**
+ * Dispatch via the host-mounted Claude Code CLI, using the operator's existing
+ * login (no API key required). Reads the prompt over stdin and asks for a
+ * machine-readable result via `--output-format json`.
+ *
+ * The CLI accepts model aliases ("opus" / "sonnet" / "haiku") and the long
+ * `claude-...` IDs. We try the bare ID first (already produced by
+ * `classifyDirectModel`), and fall back to the alias derived from the family
+ * keyword so a stale `claude-opus-4-5` mapping still routes correctly.
+ */
+async function callClaudeViaCli(
+  task: DispatchableTask,
+  prompt: string,
+  model: string,
+): Promise<AgentResponseParsed> {
+  const soul = getAgentSoulContent(task)
+  const args = ['--print', '--output-format', 'json', '--model', model]
+  if (soul) args.push('--append-system-prompt', soul)
+
+  logger.info({ taskId: task.id, model, agent: task.agent_name }, 'Dispatching task via Claude CLI')
+
+  return await new Promise<AgentResponseParsed>((resolve, reject) => {
+    const proc = spawn('claude', args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, CI: '1' },
+    })
+    let stdout = ''
+    let stderr = ''
+    const timeoutMs = 180_000
+    const timer = setTimeout(() => {
+      proc.kill('SIGTERM')
+      reject(new Error(`Claude CLI timed out after ${timeoutMs / 1000}s`))
+    }, timeoutMs)
+
+    proc.stdout.on('data', (d) => { stdout += d.toString() })
+    proc.stderr.on('data', (d) => { stderr += d.toString() })
+    proc.on('error', (err) => { clearTimeout(timer); reject(err) })
+    proc.on('close', (code) => {
+      clearTimeout(timer)
+      if (code !== 0) {
+        return reject(new Error(`claude CLI exited ${code}: ${stderr.slice(0, 500) || stdout.slice(0, 500)}`))
+      }
+      try {
+        const parsed = JSON.parse(stdout)
+        const text: string | null = (typeof parsed?.result === 'string' && parsed.result)
+          || (typeof parsed?.output === 'string' && parsed.output)
+          || (typeof parsed?.text === 'string' && parsed.text)
+          || stdout.trim()
+          || null
+        const sessionId: string | null = (typeof parsed?.session_id === 'string' && parsed.session_id)
+          || (typeof parsed?.sessionId === 'string' && parsed.sessionId)
+          || null
+
+        // Record token usage if reported.
+        if (parsed?.usage && (parsed.usage.input_tokens || parsed.usage.output_tokens)) {
+          try {
+            const db = getDatabase()
+            const now = Math.floor(Date.now() / 1000)
+            db.prepare(`
+              INSERT INTO token_usage (model, session_id, input_tokens, output_tokens, total_tokens, cost, created_at, workspace_id)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+              model,
+              sessionId || `task-${task.id}`,
+              parsed.usage.input_tokens || 0,
+              parsed.usage.output_tokens || 0,
+              (parsed.usage.input_tokens || 0) + (parsed.usage.output_tokens || 0),
+              0,
+              now,
+              task.workspace_id,
+            )
+          } catch { /* non-fatal */ }
+        }
+
+        resolve({ text, sessionId })
+      } catch {
+        resolve({ text: stdout.trim() || null, sessionId: null })
+      }
+    })
+
+    proc.stdin.write(prompt)
+    proc.stdin.end()
+  })
 }
 
 async function callOpenAICompatible(
@@ -424,6 +540,10 @@ async function callDirectly(task: DispatchableTask, prompt: string): Promise<Age
   const provider = pickProvider(model)
   if (provider === 'openai') return callOpenAIDirectly(task, prompt, model)
   if (provider === 'local') return callLocalDirectly(task, prompt, model)
+  // Anthropic: prefer the host Claude Code CLI when available — it uses the
+  // operator's existing login, no API key needed. Fall back to the API key
+  // path only if the CLI isn't installed.
+  if (isClaudeCliAvailable()) return callClaudeViaCli(task, prompt, stripProviderPrefix(model))
   return callClaudeDirectly(task, prompt)
 }
 
@@ -703,7 +823,15 @@ export async function requeueStaleTasks(): Promise<{ ok: boolean; message: strin
   let requeued = 0
   let failed = 0
 
+  // When MC runs in direct-API mode (no gateway), the agent has no heartbeat
+  // and stays "offline" by design — but tasks still get dispatched via the
+  // direct provider (Anthropic/OpenAI/local). Skip the offline-stale check
+  // entirely in that mode, otherwise every task is failed after 5 cycles
+  // before any direct-API dispatch can run.
+  const directApiSkipsStaleCheck = !isGatewayAvailable() && isDirectDispatchAvailable()
+
   for (const task of staleTasks) {
+    if (directApiSkipsStaleCheck) continue
     // Only requeue if the agent is offline or unknown
     const agentOffline = !task.agent_status || task.agent_status === 'offline'
     if (!agentOffline) continue
@@ -1036,8 +1164,11 @@ function scoreAgentForTask(
   agent: { name: string; role: string; status: string; config: string | null },
   taskText: string,
 ): number {
-  // Offline agents can't take work
-  if (agent.status === 'offline' || agent.status === 'error' || agent.status === 'sleeping') return -1
+  // Offline agents can't take work — unless we're in direct-API mode where
+  // the agent has no heartbeat by design and the dispatcher invokes the
+  // provider HTTP API directly (no live agent process required).
+  const directApiOk = !isGatewayAvailable() && isDirectDispatchAvailable()
+  if (!directApiOk && (agent.status === 'offline' || agent.status === 'error' || agent.status === 'sleeping')) return -1
 
   const text = taskText.toLowerCase()
   const keywords = ROLE_AFFINITY[agent.role] || []
