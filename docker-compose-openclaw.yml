@@ -1,0 +1,132 @@
+# OpenClaw Gateway — additive integration with Mission Control.
+#
+# This compose file is intentionally INDEPENDENT of `docker-compose.yml` and
+# `docker-compose-dev.yml`. It does not modify the MC stack; it stands up the
+# OpenClaw gateway daemon on the host's :18789 / :18790 ports. MC already
+# defaults to `OPENCLAW_GATEWAY_HOST=host.docker.internal` and
+# `OPENCLAW_GATEWAY_PORT=18789`, so when this stack is up MC discovers the
+# gateway with no config change. When this stack is down, MC silently falls
+# back to its direct-API/CLI dispatch path (see src/lib/task-dispatch.ts).
+#
+# Bring up:    make openclaw-up
+# Tear down:   make openclaw-down       # MC keeps running on direct API
+# Onboard:     make openclaw-onboard    # interactive provider/skills wizard
+#
+# Build context is `./openclaw-src/`, which `make openclaw-clone` populates
+# from https://github.com/openclaw/openclaw. The clone is gitignored.
+
+services:
+  openclaw-gateway:
+    image: ${OPENCLAW_IMAGE:-mc-openclaw:local}
+    build:
+      context: ./openclaw-src
+      dockerfile: Dockerfile
+    container_name: mc-openclaw-gateway
+    init: true
+    restart: unless-stopped
+
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      TZ: ${OPENCLAW_TZ:-UTC}
+      # Gateway auth — leave empty on first boot to let openclaw mint a token,
+      # then read it back from .openclaw-data/openclaw.json (gateway.auth.token)
+      # and copy into MC `.env` as OPENCLAW_GATEWAY_TOKEN. After that, set the
+      # value here so subsequent restarts use the operator-controlled token.
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
+      OPENCLAW_DISABLE_BONJOUR: ${OPENCLAW_DISABLE_BONJOUR:-1}
+      OPENCLAW_PLUGIN_STAGE_DIR: /var/lib/openclaw/plugin-runtime-deps
+      # Provider keys — picked up by openclaw bundled providers.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+
+    env_file:
+      - path: .env
+        required: false
+      - path: .env.openclaw
+        required: false
+
+    volumes:
+      # Persistent gateway state: openclaw.json, sessions DB, workspace, skills,
+      # bundled plugin runtime deps. Path is bind-mounted next to the MC repo
+      # so host operators can `cat .openclaw-data/openclaw.json` to inspect.
+      - ./.openclaw-data:/home/node/.openclaw
+      - openclaw-plugin-runtime-deps:/var/lib/openclaw/plugin-runtime-deps
+
+    # Same alias MC uses to find the host gateway: `host.docker.internal`.
+    # When MC and openclaw both run on Docker Engine (Linux), this maps to
+    # the docker0 bridge IP.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    ports:
+      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+
+    command:
+      - "node"
+      - "dist/index.js"
+      - "gateway"
+      - "--bind"
+      - "${OPENCLAW_GATEWAY_BIND:-lan}"
+      - "--port"
+      - "18789"
+
+    healthcheck:
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "fetch('http://127.0.0.1:18789/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # CLI sidecar — re-uses the gateway image, shares its network namespace, and
+  # is used only for interactive operator commands (`openclaw onboard`,
+  # `openclaw doctor`, `openclaw agent --message ...`). The MC dispatcher does
+  # not depend on this service; it talks directly to the gateway over TCP.
+  openclaw-cli:
+    image: ${OPENCLAW_IMAGE:-mc-openclaw:local}
+    container_name: mc-openclaw-cli
+    network_mode: "service:openclaw-gateway"
+    init: true
+    stdin_open: true
+    tty: true
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      TZ: ${OPENCLAW_TZ:-UTC}
+      BROWSER: echo
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      OPENCLAW_PLUGIN_STAGE_DIR: /var/lib/openclaw/plugin-runtime-deps
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+
+    env_file:
+      - path: .env
+        required: false
+      - path: .env.openclaw
+        required: false
+
+    volumes:
+      - ./.openclaw-data:/home/node/.openclaw
+      - openclaw-plugin-runtime-deps:/var/lib/openclaw/plugin-runtime-deps
+
+    entrypoint: ["node", "dist/index.js"]
+    depends_on:
+      - openclaw-gateway
+
+volumes:
+  openclaw-plugin-runtime-deps:

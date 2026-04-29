@@ -126,6 +126,78 @@ SQLite database is stored in `/app/.data/` inside the container. Mount a volume 
 docker run -v /path/to/data:/app/.data ...
 ```
 
+### Self-contained Operator Setup (Linux host with existing Claude Code / Codex CLIs)
+
+For an operator running MC on a Linux/Docker host who already has authenticated
+`claude` / `codex` / `opencode` CLIs in `~/.local/bin`, the default
+`docker-compose.yml` projects the host configuration into the container so MC
+can drive those same authenticated CLIs without re-login. This path runs MC
+**without** OpenClaw gateway (which is macOS-only).
+
+What the default compose does for this case:
+
+- **Image bakes `claude` and `codex` as a fallback** — if the host doesn't
+  have them in `~/.local/bin`, the container's installed copies are used.
+  The host's `~/.local/bin` comes first in `PATH`, so an authenticated host
+  install transparently shadows the baked one.
+- **Host home is bind-mounted** — `${HOME}/.local/bin`, `${HOME}/.bun`,
+  `${HOME}/.claude`, `${HOME}/.claude.json`, and `${HOME}/.local/share/claude`
+  are mounted under `/home/nextjs/...` inside the container, plus `${HOME}`
+  itself and `/mnt` are mounted at the same absolute paths so file paths the
+  user sees on the host work identically inside the container.
+- **Container runs as uid 1000** (the slim image's existing `node` user,
+  renamed `nextjs`) so bind-mounted host files (typical Linux uid 1000) are
+  read/written without `chown`.
+
+**Ports.** `docker-compose.yml` maps `${MC_PORT:-3000}` on the host to
+`${PORT:-3000}` in the container. The bundled `Makefile` defaults to
+`http://127.0.0.1:7012` for its readiness probe — set `MC_PORT=7012` in your
+`.env` if you use the Makefile, or change the Makefile's `URL :=` line to
+match your `MC_PORT`.
+
+**uid mismatch.** If your host user has uid ≠ 1000 (common on macOS, or
+multi-user Linux), edit `docker-compose.yml`:
+
+```yaml
+user: "$(id -u):$(id -g)"   # or hard-code your uid:gid
+```
+
+Otherwise bind-mounted files in `${HOME}` will be read-only inside the
+container and Claude Code will fail to write its config.
+
+**Memory.** The compose file sets `memory: 2G` deploy limit. The upstream
+default of 512M OOM-kills MC when `/chat` opens a `node-pty` terminal and the
+task-dispatch loop is running concurrently. Do not lower this limit unless
+you are sure neither feature is in use.
+
+#### Direct API dispatch (gateway-free)
+
+When OpenClaw is not present, MC dispatches tasks via direct provider APIs.
+Provider is picked by the agent's `dispatchModel` prefix:
+
+| `dispatchModel` pattern                                          | Provider           | Auth |
+|------------------------------------------------------------------|--------------------|------|
+| `claude-*`, `anthropic/*`                                        | Anthropic API      | `ANTHROPIC_API_KEY` |
+| `gpt-*`, `o1-*`, `o3-*`, `openai/*`                              | OpenAI API         | `OPENAI_API_KEY` |
+| `local/*`, `ollama/*`, `lmstudio/*`, `litellm/*`                 | OpenAI-compatible  | `LOCAL_LLM_ENDPOINT` (+ optional `LOCAL_LLM_API_KEY`) |
+
+The "local" provider speaks the OpenAI `/v1/chat/completions` REST shape, so
+LMStudio, Ollama, vLLM, and a [liteLLM](https://github.com/BerriAI/litellm)
+proxy all work behind it. For multiple local backends behind one endpoint,
+run liteLLM as a sidecar container and point `LOCAL_LLM_ENDPOINT` at it.
+
+#### Shared host Claude Code session (`MC_HOST_SESSION_MODE`)
+
+`/chat` can drive a Claude Code session that the operator has open in a host
+terminal — both processes share the same `~/.claude/projects/<encoded>/<id>.jsonl`
+transcript. Pick the policy via env:
+
+| Mode | Behaviour |
+|------|-----------|
+| `coexist` (default) | Both MC and the host CLI append to the jsonl. Each side picks up the other's writes on its next prompt. Possible interleaving on simultaneous writes — fine for a single operator switching between the two surfaces. |
+| `block-active` | Returns `409` from `/api/sessions/continue` if the jsonl was touched in the last 60s (heuristic: a live host CLI updates mtime frequently). Forces MC to act only on idle sessions. |
+| `nudge` | Same as `coexist` plus a best-effort `utimes()` on the jsonl after the reply, so a tail-watching host CLI sees a fresh mtime. |
+
 ### Production Hardening
 
 ```bash
@@ -149,6 +221,13 @@ See `.env.example` for the full list. Key variables:
 | `OPENCLAW_STATE_DIR` | No | `~/.openclaw` | Exact path to the OpenClaw state directory. Preferred over `OPENCLAW_HOME` — avoids double-nesting when the path already ends in `.openclaw` |
 | `MISSION_CONTROL_DATA_DIR` | No | `.data/` | Directory for all Mission Control data files (DB, tokens, etc.). Use an absolute path with the standalone server to survive rebuilds. |
 | `MC_ALLOWED_HOSTS` | No | `localhost,127.0.0.1` | Allowed hosts in production |
+| `MC_PORT` | No | `3000` | Host-side port that the bundled `docker-compose.yml` publishes the container's `PORT` on. The bundled `Makefile` expects `7012`. |
+| `ANTHROPIC_API_KEY` | No (Yes for direct dispatch) | - | Used when `dispatchModel` matches `claude-*` / `anthropic/*` and no gateway is available. |
+| `OPENAI_API_KEY` | No | - | Used when `dispatchModel` matches `gpt-*` / `o1-*` / `o3-*` / `openai/*`. |
+| `LOCAL_LLM_ENDPOINT` | No | `http://host.docker.internal:1234/v1` | OpenAI-compatible base URL (LMStudio default shown). Override for Ollama (`:11434/v1`) or a liteLLM proxy. |
+| `LOCAL_LLM_API_KEY` | No | - | Bearer token sent to `LOCAL_LLM_ENDPOINT`. Only needed for proxies that require auth (e.g. liteLLM with master key). |
+| `MC_HOST_SESSION_MODE` | No | `coexist` | Policy when MC `--resumes` a host Claude Code session that may have a live CLI attached. One of `coexist`, `block-active`, `nudge`. |
+| `NEXT_PUBLIC_CHAT_POLL_INTERVAL_MS` | No | `1500` (code) / `1000` (docker-compose) | `/chat` transcript poll cadence (ms) when the SSE channel drops. **Baked at build time**, so changing it requires `make rebuild`. |
 
 > **Note — `OPENCLAW_HOME` vs `OPENCLAW_STATE_DIR`**
 >
