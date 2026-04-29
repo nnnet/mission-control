@@ -245,6 +245,61 @@ openclaw-doctor:  ## Run openclaw doctor (config + connectivity diagnostics)
 	@cd $(PROJECT_DIR)
 	$(COMPOSE_OC) run --rm openclaw-cli doctor
 
+.PHONY: openclaw-pair-mc
+openclaw-pair-mc:  ## Auto-pair MC's openclaw CLI with the gateway (one-shot, idempotent)
+	@cd $(PROJECT_DIR)
+	# 1. Ensure both stacks are up
+	@if ! docker ps --format '{{.Names}}' | grep -q '^mc-openclaw-gateway$$'; then \
+	  echo "ERROR: mc-openclaw-gateway not running — run 'make openclaw-up' first" >&2; exit 1; \
+	fi
+	@if ! docker ps --format '{{.Names}}' | grep -q '^mission-control-dev$$'; then \
+	  echo "ERROR: mission-control-dev not running — run 'make dev' first" >&2; exit 1; \
+	fi
+	# 2. Trigger MC's openclaw CLI once so it generates ~/.openclaw/identity/device.json
+	#    and submits a pending pairing request to the gateway. The call itself is
+	#    expected to fail with "pairing required" — that is exactly what creates
+	#    the pending entry. Subsequent retries after the patch will succeed.
+	@echo "==> triggering pairing request from MC..."
+	@docker exec mission-control-dev openclaw gateway call health --json --timeout 5000 >/dev/null 2>&1 || true
+	# Give the gateway a moment to flush the pending entry to disk.
+	@sleep 1
+	# 3. Patch pending → paired transactionally on host filesystem.
+	@./.venv/bin/python3 scripts/openclaw-auto-pair.py 2>&1 || python3 scripts/openclaw-auto-pair.py
+	# 4. Map MC's agent display names to openclaw agent ids declared in
+	#    openclaw.json. Without this, runOpenClaw passes "Architect (Claude
+	#    Opus)" as agentId which the gateway rejects as unknown.
+	@echo "==> binding MC agents to openclaw agent ids..."
+	@docker exec mission-control-dev sh -c "cd /app && node -e \"\
+	const Database=require('better-sqlite3'); \
+	const db=new Database('.data/mission-control.db'); \
+	const map={'Architect (Claude Opus)':'architect','Aegis (Claude Sonnet, reviewer)':'aegis','Dev (OpenAI)':'dev','Linter (Local LLM)':'linter'}; \
+	let changed=0; \
+	for (const a of db.prepare('SELECT id, name, config FROM agents').all()) { \
+	  const oc=map[a.name]; if (!oc) continue; \
+	  const cfg=a.config?JSON.parse(a.config):{}; \
+	  if (cfg.openclawId===oc) continue; \
+	  cfg.openclawId=oc; \
+	  db.prepare('UPDATE agents SET config=? WHERE id=?').run(JSON.stringify(cfg), a.id); \
+	  changed++; \
+	} \
+	console.log('agents updated:', changed); \
+	\""
+	# 5. Verify by re-issuing the call.
+	@echo "==> verifying pairing..."
+	@docker exec mission-control-dev openclaw gateway call health --json --timeout 8000 2>&1 | head -3
+
+.PHONY: openclaw-unpair-mc
+openclaw-unpair-mc:  ## Remove MC's paired entry (gateway side) and MC's local identity. Confirm with CONFIRM=yes.
+	@cd $(PROJECT_DIR)
+	@if [ "$(CONFIRM)" != "yes" ]; then \
+	  echo "Refusing to unpair without CONFIRM=yes"; exit 1; \
+	fi
+	@rm -rf .mc-openclaw/identity .mc-openclaw/devices 2>/dev/null || true
+	@if [ -f .openclaw-data/devices/paired.json ]; then \
+	  python3 -c "import json,pathlib; p=pathlib.Path('.openclaw-data/devices/paired.json'); d=json.loads(p.read_text()); mc=[k for k,v in d.items() if v.get('clientId')=='cli' and v.get('platform')=='linux']; [d.pop(k) for k in mc]; p.write_text(json.dumps(d,indent=2)); print(f'removed {len(mc)} entries from paired.json')"; \
+	fi
+	@echo "MC openclaw pairing cleared. Restart MC and run 'make openclaw-pair-mc' to re-pair."
+
 .PHONY: openclaw-token
 openclaw-token:  ## Print the gateway token from .openclaw-data/openclaw.json (for MC .env)
 	@cd $(PROJECT_DIR)

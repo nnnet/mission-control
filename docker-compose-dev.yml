@@ -74,6 +74,11 @@ services:
       - ${HOME}/.claude.json:/home/nextjs/.claude.json:rw
       - /mnt:/mnt:rw
       - ${HOME}:${HOME}:rw
+      # ── OpenClaw CLI state (persists pairing identity + device-auth.json
+      # so MC keeps the same paired identity across container restarts).
+      # Bound to ./.mc-openclaw/ on the host for direct filesystem patching
+      # by `make openclaw-pair-mc`. ──
+      - ./.mc-openclaw:/home/nextjs/.openclaw:rw
 
     extra_hosts:
       - "host.docker.internal:host-gateway"

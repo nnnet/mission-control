@@ -56,5 +56,6 @@ WALKTHROUGH.md
 # OpenClaw integration (additive) — clone + persistent state are local-only
 /openclaw-src/
 /.openclaw-data/
+/.mc-openclaw/
 /.env.openclaw
 /examples/
