@@ -12,6 +12,24 @@ services:
       # If your gateway runs in another container, set this to the container name instead.
       - OPENCLAW_GATEWAY_HOST=${OPENCLAW_GATEWAY_HOST:-host.docker.internal}
       - OPENCLAW_GATEWAY_PORT=${OPENCLAW_GATEWAY_PORT:-18789}
+      # Host CLIs (~/.local/bin) come first; container-baked fallbacks second.
+      # Container HOME stays /home/nextjs; bind-mounts below project the host
+      # user's $HOME contents into that path.
+      - PATH=/home/nextjs/.local/bin:/home/nextjs/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - HOME=/home/nextjs
+      # MC's direct-API dispatch uses these (no gateway needed).
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # How MC interacts with a session that may have a live host `claude` CLI:
+      #   coexist (default) — both write to the same jsonl, race possible
+      #   block-active      — refuse with 409 if jsonl mtime < 60s ago
+      #   nudge             — coexist + bump mtime after reply
+      - MC_HOST_SESSION_MODE=${MC_HOST_SESSION_MODE:-coexist}
+      # /chat poll interval (ms) — fallback refresh when SSE drops on
+      # `session:` conversations. NEXT_PUBLIC_* is baked at BUILD time, so
+      # changing it requires `make rebuild`. Component default: 1500.
+      # 1000ms gives near-live updates as claude writes the jsonl line-by-line.
+      - NEXT_PUBLIC_CHAT_POLL_INTERVAL_MS=${NEXT_PUBLIC_CHAT_POLL_INTERVAL_MS:-1000}
       # ── Browser-side gateway connection (user's browser → gateway) ──
       # NEXT_PUBLIC_GATEWAY_HOST must be reachable from the user's browser, NOT from
       # inside the container. For local Docker: leave empty (auto-detected from browser).
@@ -29,8 +47,24 @@ services:
     env_file:
       - path: .env
         required: false
+    # Run as host UID:GID (defaults 1000:1000) so bind-mounted host configs
+    # ($HOME/.local/bin, $HOME/.claude, $HOME/.bun) are owned by a uid the
+    # container can read/write without chown.
+    user: "1000:1000"
     volumes:
       - mc-data:/app/.data
+      # Host configs are projected into /home/nextjs (container's $HOME) using
+      # the invoking shell's ${HOME}. Compose interpolates at `up` time, so the
+      # paths track whichever user runs the command.
+      - ${HOME}/.local/bin:/home/nextjs/.local/bin:rw
+      - ${HOME}/.local/share/claude:/home/nextjs/.local/share/claude:rw
+      - ${HOME}/.bun:/home/nextjs/.bun:rw
+      - ${HOME}/.claude:/home/nextjs/.claude:rw
+      - ${HOME}/.claude.json:/home/nextjs/.claude.json:rw
+      # Host repos / datasets visible to agents (mounted at the same absolute
+      # path so paths the user sees on the host work identically in container).
+      - /mnt:/mnt:rw
+      - ${HOME}:${HOME}:rw
       # Optional: mount your OpenClaw state directory read-only so Mission Control
       # can read agent configs and memory. Uncomment and adjust the host path:
       # - ${OPENCLAW_HOME:-~/.openclaw}:/run/openclaw:ro
@@ -52,9 +86,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
-          cpus: '1.0'
-          pids: 256
+          # Bumped from upstream default (512M). Next.js 16 + node-pty +
+          # task-dispatch loop OOMs at 512M when /chat opens a terminal.
+          memory: 2G
+          cpus: '2.0'
+          pids: 512
     networks:
       - mc-net
     restart: unless-stopped

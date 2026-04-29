@@ -31,9 +31,11 @@ const MODEL_PRICING: Record<string, { input: number; output: number }> = {
 
 const DEFAULT_PRICING = { input: 3 / 1_000_000, output: 15 / 1_000_000 }
 
-// Session is "active" if last activity was within this window.
-// Local CLI sessions can remain interactive without emitting frequent logs.
-const ACTIVE_THRESHOLD_MS = 90 * 60 * 1000
+// "Active" window. Upstream default was 90 minutes which surfaced too many
+// stale jsonls; 2 minutes was too tight (any pause >2 min in an active host
+// CLI dropped the session out of "active"). 15 minutes covers normal think
+// time between user prompts in a live `claude` session.
+const ACTIVE_THRESHOLD_MS = 15 * 60 * 1000
 const FUTURE_TOLERANCE_MS = 60 * 1000
 
 interface SessionStats {
@@ -312,6 +314,7 @@ export async function syncClaudeSessions(force = false): Promise<{ ok: boolean; 
     `)
 
     let upserted = 0
+    let removed = 0
     db.transaction(() => {
       // Mark all sessions inactive before scanning
       db.prepare('UPDATE claude_sessions SET is_active = 0').run()
@@ -326,11 +329,28 @@ export async function syncClaudeSessions(force = false): Promise<{ ok: boolean; 
         )
         upserted++
       }
+
+      // Delete rows whose jsonl no longer exists on disk. Without this, removed
+      // session files (manual cleanup, project rename, claude --resume that
+      // creates a new id) leave phantom rows that the API still surfaces as
+      // "Active" via the derivedActive mtime fallback.
+      const liveIds = new Set(sessions.map(s => s.sessionId))
+      const allRows = db.prepare('SELECT session_id FROM claude_sessions').all() as Array<{ session_id: string }>
+      const del = db.prepare('DELETE FROM claude_sessions WHERE session_id = ?')
+      for (const row of allRows) {
+        if (!liveIds.has(row.session_id)) {
+          del.run(row.session_id)
+          removed++
+        }
+      }
     })()
 
     const active = sessions.filter(s => s.isActive).length
     lastSyncAt = Date.now()
-    lastSyncResult = { ok: true, message: `Scanned ${upserted} session(s), ${active} active` }
+    lastSyncResult = {
+      ok: true,
+      message: `Scanned ${upserted} session(s), ${active} active${removed ? `, removed ${removed} orphan(s)` : ''}`,
+    }
     return lastSyncResult
   } catch (err: any) {
     logger.error({ err }, 'Claude session sync failed')
