@@ -8,36 +8,76 @@
 # gateway with no config change. When this stack is down, MC silently falls
 # back to its direct-API/CLI dispatch path (see src/lib/task-dispatch.ts).
 #
+# Architecture (live-updateable, bind-mounted):
+#   - Both `openclaw-gateway` and the MC dev container bind-mount
+#     `./openclaw-src/` from the host. The container runs from there:
+#     `node /app/dist/index.js gateway`.
+#   - To update openclaw: `make openclaw-update` runs `git pull` in
+#     openclaw-src/ and re-runs `pnpm install + pnpm build` via the
+#     `openclaw-builder` one-shot service. After build, restart the
+#     gateway with `make openclaw-restart` — no docker image rebuild.
+#
 # Bring up:    make openclaw-up
 # Tear down:   make openclaw-down       # MC keeps running on direct API
+# Update:      make openclaw-update     # git pull + rebuild dist + restart
 # Onboard:     make openclaw-onboard    # interactive provider/skills wizard
-#
-# Build context is `./openclaw-src/`, which `make openclaw-clone` populates
-# from https://github.com/openclaw/openclaw. The clone is gitignored.
 
 services:
+  # Builder — one-shot: installs deps and compiles dist into ./openclaw-src/
+  # on the host. Run via `make openclaw-build` (or directly:
+  # `docker compose -f docker-compose-openclaw.yml --profile build run --rm
+  # openclaw-builder`). The output (./openclaw-src/dist + ./openclaw-src/
+  # node_modules) is what `openclaw-gateway` and MC's CLI wrapper consume.
+  openclaw-builder:
+    image: node:24-bookworm
+    profiles: ["build"]
+    container_name: mc-openclaw-builder
+    working_dir: /app
+    environment:
+      NODE_OPTIONS: "--max-old-space-size=2048"
+      CI: "1"
+    volumes:
+      - ./openclaw-src:/app:rw
+      - openclaw-pnpm-store:/root/.local/share/pnpm/store
+      - openclaw-bun-cache:/root/.bun
+    entrypoint: ["bash", "-lc"]
+    command:
+      - |
+        set -e
+        corepack enable
+        if [ ! -x /root/.bun/bin/bun ]; then
+          curl -fsSL https://bun.sh/install | bash
+        fi
+        export PATH=/root/.bun/bin:$PATH
+        echo "==> pnpm install (frozen lockfile)"
+        pnpm install --frozen-lockfile
+        echo "==> pnpm build"
+        pnpm build
+        echo "==> done — dist + node_modules populated under ./openclaw-src/"
+
   openclaw-gateway:
-    image: ${OPENCLAW_IMAGE:-mc-openclaw:local}
-    build:
-      context: ./openclaw-src
-      dockerfile: Dockerfile
+    image: node:24-bookworm
     container_name: mc-openclaw-gateway
     init: true
     restart: unless-stopped
+    working_dir: /app
+    # Run as the host user (uid 1000) so files written into bind-mounted
+    # ./.openclaw-data and ./openclaw-src are readable/writable on the host
+    # without sudo. The stock node:24-bookworm image's `node` user is uid 1000.
+    user: "1000:1000"
 
     environment:
       HOME: /home/node
       TERM: xterm-256color
       TZ: ${OPENCLAW_TZ:-UTC}
-      # Gateway auth — leave empty on first boot to let openclaw mint a token,
-      # then read it back from .openclaw-data/openclaw.json (gateway.auth.token)
-      # and copy into MC `.env` as OPENCLAW_GATEWAY_TOKEN. After that, set the
-      # value here so subsequent restarts use the operator-controlled token.
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
       OPENCLAW_DISABLE_BONJOUR: ${OPENCLAW_DISABLE_BONJOUR:-1}
-      OPENCLAW_PLUGIN_STAGE_DIR: /var/lib/openclaw/plugin-runtime-deps
-      # Provider keys — picked up by openclaw bundled providers.
+      # Plugin runtime stage dir lives under bind-mounted state so it inherits
+      # uid 1000 ownership and survives container recreate. Avoid the default
+      # /var/lib/openclaw/* path because Docker named volumes are root-owned
+      # and our container runs as uid 1000.
+      OPENCLAW_PLUGIN_STAGE_DIR: /home/node/.openclaw/plugin-runtime-deps
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
@@ -50,15 +90,14 @@ services:
         required: false
 
     volumes:
-      # Persistent gateway state: openclaw.json, sessions DB, workspace, skills,
-      # bundled plugin runtime deps. Path is bind-mounted next to the MC repo
-      # so host operators can `cat .openclaw-data/openclaw.json` to inspect.
+      # Application code — bind-mounted from the host clone. Update via
+      # `make openclaw-update`; restart container to pick up new dist.
+      - ./openclaw-src:/app:rw
+      # Persistent gateway state (openclaw.json, sessions DB, workspace,
+      # plugin-runtime-deps stage). All under one bind-mount so ownership
+      # is consistent.
       - ./.openclaw-data:/home/node/.openclaw
-      - openclaw-plugin-runtime-deps:/var/lib/openclaw/plugin-runtime-deps
 
-    # Same alias MC uses to find the host gateway: `host.docker.internal`.
-    # When MC and openclaw both run on Docker Engine (Linux), this maps to
-    # the docker0 bridge IP.
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -84,19 +123,20 @@ services:
       interval: 30s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 60s
 
-  # CLI sidecar — re-uses the gateway image, shares its network namespace, and
-  # is used only for interactive operator commands (`openclaw onboard`,
-  # `openclaw doctor`, `openclaw agent --message ...`). The MC dispatcher does
-  # not depend on this service; it talks directly to the gateway over TCP.
+  # CLI sidecar — interactive ops (`openclaw onboard`, `openclaw doctor`).
+  # Shares the gateway's network namespace and bind-mounts the same
+  # openclaw-src tree, so it always runs the same code as the gateway.
   openclaw-cli:
-    image: ${OPENCLAW_IMAGE:-mc-openclaw:local}
+    image: node:24-bookworm
     container_name: mc-openclaw-cli
     network_mode: "service:openclaw-gateway"
     init: true
     stdin_open: true
     tty: true
+    working_dir: /app
+    user: "1000:1000"
     cap_drop:
       - NET_RAW
       - NET_ADMIN
@@ -121,12 +161,13 @@ services:
         required: false
 
     volumes:
+      - ./openclaw-src:/app:rw
       - ./.openclaw-data:/home/node/.openclaw
-      - openclaw-plugin-runtime-deps:/var/lib/openclaw/plugin-runtime-deps
 
     entrypoint: ["node", "dist/index.js"]
     depends_on:
       - openclaw-gateway
 
 volumes:
-  openclaw-plugin-runtime-deps:
+  openclaw-pnpm-store:
+  openclaw-bun-cache:

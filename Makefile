@@ -177,10 +177,15 @@ openclaw-clone:  ## Clone github.com/openclaw/openclaw into ./openclaw-src (idem
 	@echo "openclaw source ready at $(OPENCLAW_SRC)"
 
 .PHONY: openclaw-build
-openclaw-build: openclaw-clone  ## Build the openclaw image (5-10 min on first run)
+openclaw-build: openclaw-clone  ## Build openclaw dist into ./openclaw-src/ (5-10 min on first run)
 	@cd $(PROJECT_DIR)
-	$(COMPOSE_OC) build openclaw-gateway
-	@echo "openclaw image built; run 'make openclaw-up' to start it"
+	$(COMPOSE_OC) --profile build run --rm openclaw-builder
+	@echo "openclaw dist + node_modules populated under ./openclaw-src/"
+	@echo "Run 'make openclaw-up' to start the gateway."
+
+.PHONY: openclaw-update
+openclaw-update: openclaw-clone openclaw-build openclaw-restart  ## git pull openclaw-src + rebuild dist + restart gateway (no docker rebuild)
+	@echo "==> openclaw updated to $$(cd $(OPENCLAW_SRC) && git rev-parse --short HEAD); gateway restarted."
 
 .PHONY: openclaw-up
 openclaw-up:  ## Start openclaw gateway daemon (port 18789); auto-builds if image missing

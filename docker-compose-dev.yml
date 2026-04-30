@@ -79,6 +79,11 @@ services:
       # Bound to ./.mc-openclaw/ on the host for direct filesystem patching
       # by `make openclaw-pair-mc`. ──
       - ./.mc-openclaw:/home/nextjs/.openclaw:rw
+      # ── OpenClaw CLI runtime (live-updateable via `make openclaw-update`).
+      # The /usr/local/bin/openclaw shim baked into Dockerfile.dev runs
+      # `node /opt/openclaw-src/dist/index.js`, so updating dist on the host
+      # immediately changes the CLI's behaviour with no image rebuild. ──
+      - ./openclaw-src:/opt/openclaw-src:ro
 
     extra_hosts:
       - "host.docker.internal:host-gateway"
