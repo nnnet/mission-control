@@ -269,23 +269,37 @@ openclaw-pair-mc:  ## Auto-pair MC's openclaw CLI with the gateway (one-shot, id
 	# Give the gateway a moment to flush the pending entry to disk.
 	@sleep 1
 	# 3. Patch pending → paired transactionally on host filesystem.
-	@./.venv/bin/python3 scripts/openclaw-auto-pair.py 2>&1 || python3 scripts/openclaw-auto-pair.py
+	@if [ -x ./.venv/bin/python3 ]; then \
+	  ./.venv/bin/python3 scripts/openclaw-auto-pair.py; \
+	else \
+	  python3 scripts/openclaw-auto-pair.py; \
+	fi
 	# 4. Map MC's agent display names to openclaw agent ids declared in
 	#    openclaw.json. Without this, runOpenClaw passes "Architect (Claude
 	#    Opus)" as agentId which the gateway rejects as unknown.
+	#    Also populate session_key so the Orchestration → Command tab in MC
+	#    UI doesn't disable the agent dropdown (it requires non-null
+	#    session_key on agents).
 	@echo "==> binding MC agents to openclaw agent ids..."
 	@docker exec mission-control-dev sh -c "cd /app && node -e \"\
 	const Database=require('better-sqlite3'); \
 	const db=new Database('.data/mission-control.db'); \
 	const map={'Architect (Claude Opus)':'architect','Aegis (Claude Sonnet, reviewer)':'aegis','Dev (OpenAI)':'dev','Linter (Local LLM)':'linter'}; \
 	let changed=0; \
-	for (const a of db.prepare('SELECT id, name, config FROM agents').all()) { \
+	for (const a of db.prepare('SELECT id, name, config, session_key FROM agents').all()) { \
 	  const oc=map[a.name]; if (!oc) continue; \
 	  const cfg=a.config?JSON.parse(a.config):{}; \
-	  if (cfg.openclawId===oc) continue; \
-	  cfg.openclawId=oc; \
-	  db.prepare('UPDATE agents SET config=? WHERE id=?').run(JSON.stringify(cfg), a.id); \
-	  changed++; \
+	  let touched=false; \
+	  if (cfg.openclawId!==oc) { cfg.openclawId=oc; touched=true; } \
+	  const expectedKey='mc-'+oc; \
+	  if (a.session_key!==expectedKey) { \
+	    db.prepare('UPDATE agents SET session_key=?, updated_at=? WHERE id=?').run(expectedKey, Math.floor(Date.now()/1000), a.id); \
+	    touched=true; \
+	  } \
+	  if (touched) { \
+	    db.prepare('UPDATE agents SET config=? WHERE id=?').run(JSON.stringify(cfg), a.id); \
+	    changed++; \
+	  } \
 	} \
 	console.log('agents updated:', changed); \
 	\""

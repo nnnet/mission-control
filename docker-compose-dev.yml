@@ -31,6 +31,12 @@ services:
       # bridge network is private to this host. Production deployments should
       # use wss:// or an SSH tunnel instead.
       - OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-1}
+      # Browser-facing gateway URL. The MC backend (inside container) reaches
+      # the gateway at host.docker.internal:18789, but a browser on the host
+      # cannot resolve that name and must use the published port directly.
+      # `NEXT_PUBLIC_GATEWAY_URL` overrides what the WebSocket client connects
+      # to (see src/app/api/gateways/connect/route.ts:156).
+      - NEXT_PUBLIC_GATEWAY_URL=${NEXT_PUBLIC_GATEWAY_URL:-ws://127.0.0.1:18789}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LOCAL_LLM_ENDPOINT=${LOCAL_LLM_ENDPOINT:-http://host.docker.internal:1234/v1}
