@@ -37,6 +37,16 @@ services:
       # `NEXT_PUBLIC_GATEWAY_URL` overrides what the WebSocket client connects
       # to (see src/app/api/gateways/connect/route.ts:156).
       - NEXT_PUBLIC_GATEWAY_URL=${NEXT_PUBLIC_GATEWAY_URL:-ws://127.0.0.1:18789}
+      # Gateway optional from the browser's perspective. Even with the URL
+      # right, a browser WS connection comes in from the docker bridge IP,
+      # not loopback — openclaw treats that as an unpaired device and closes
+      # the WebSocket with code 1006. Each browser session would need its own
+      # pairing approval flow, which is impractical for a dev-stack UI. With
+      # GATEWAY_OPTIONAL=true the MC frontend stops retrying WS forever and
+      # falls back to HTTP polling for live updates (status, sessions, etc.).
+      # Backend still uses the gateway for task dispatch, so MC functionality
+      # is unaffected — only the WebSocket-driven live event stream is off.
+      - NEXT_PUBLIC_GATEWAY_OPTIONAL=${NEXT_PUBLIC_GATEWAY_OPTIONAL:-true}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LOCAL_LLM_ENDPOINT=${LOCAL_LLM_ENDPOINT:-http://host.docker.internal:1234/v1}
