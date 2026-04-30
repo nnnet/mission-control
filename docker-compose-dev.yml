@@ -90,6 +90,10 @@ services:
       # `node /opt/openclaw-src/dist/index.js`, so updating dist on the host
       # immediately changes the CLI's behaviour with no image rebuild. ──
       - ./openclaw-src:/opt/openclaw-src:ro
+      # ── Compat shim: rewrites retired openclaw CLI shapes that MC's
+      # source still uses (e.g. `gateway sessions_send` -> `gateway call
+      # chat.send`). Bind-mounted so edits don't need an image rebuild. ──
+      - ./scripts/openclaw-cli-shim.py:/usr/local/lib/openclaw-cli-shim.py:ro
 
     extra_hosts:
       - "host.docker.internal:host-gateway"

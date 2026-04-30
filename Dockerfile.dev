@@ -23,6 +23,16 @@ RUN npm install -g @anthropic-ai/claude-code @openai/codex 2>&1 | tail -5
 # openclaw, run `make openclaw-update` on the host — it git-pulls openclaw-src
 # and rebuilds dist via the openclaw-builder container; both this shim AND the
 # gateway daemon pick up the new dist on the next call (no docker rebuild).
+#
+# The shim ALSO transparently rewrites legacy CLI shapes that MC source uses
+# but that openclaw 2026.4.x has retired. Specifically MC's wake / agent
+# message endpoints call `openclaw gateway sessions_send --session X --message
+# Y`, but the daemon now exposes that only as the RPC method `chat.send`
+# behind `openclaw gateway call chat.send --params {...}`. Rewriting in the
+# shim keeps MC unmodified while staying compatible with new openclaw.
+#
+# The shim itself is bind-mounted from ./scripts/openclaw-cli-shim.py via
+# docker-compose-dev.yml so edits land live without rebuilding this image.
 RUN cat > /usr/local/bin/openclaw <<'SHIM' && chmod +x /usr/local/bin/openclaw
 #!/bin/sh
 # Live-loaded openclaw CLI shim. Source: /opt/openclaw-src (bind-mounted from
@@ -31,6 +41,9 @@ if [ ! -f /opt/openclaw-src/dist/index.js ]; then
   echo "openclaw shim: /opt/openclaw-src/dist/index.js not found." >&2
   echo "  Did you run 'make openclaw-build' to populate openclaw-src/dist/?" >&2
   exit 127
+fi
+if [ -f /usr/local/lib/openclaw-cli-shim.py ]; then
+  exec python3 /usr/local/lib/openclaw-cli-shim.py "$@"
 fi
 exec node /opt/openclaw-src/dist/index.js "$@"
 SHIM
