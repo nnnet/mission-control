@@ -59,3 +59,7 @@ WALKTHROUGH.md
 /.mc-openclaw/
 /.env.openclaw
 /examples/
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
