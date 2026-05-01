@@ -1,0 +1,43 @@
+AGENTS.md
+  074beebdfee1e7da 1-150
+.beads/.gitignore
+  074beebdfee1e7da 1-51
+.beads/README.md
+  074beebdfee1e7da 1-81
+.gitignore
+  074beebdfee1e7da 62-65
+.beads/hooks/pre-commit
+  074beebdfee1e7da 1-9
+.beads/hooks/pre-push
+  074beebdfee1e7da 1-9
+.beads/config.yaml
+  074beebdfee1e7da 1-54
+.beads/hooks/post-checkout
+  074beebdfee1e7da 1-9
+.beads/hooks/post-merge
+  074beebdfee1e7da 1-9
+.beads/hooks/prepare-commit-msg
+  074beebdfee1e7da 1-9
+.beads/metadata.json
+  074beebdfee1e7da 1-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "9c8526404e155118b6d7fa004d89393c9757c3da",
+  "prompts": {
+    "074beebdfee1e7da": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_21a6f1e8dffevlwxdtSHCi4oPW",
+        "model": "openai/gpt-4o-mini"
+      },
+      "human_author": "nnnet",
+      "messages": [],
+      "total_additions": 392,
+      "total_deletions": 0,
+      "accepted_lines": 392,
+      "overriden_lines": 0
+    }
+  }
+}
