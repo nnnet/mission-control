@@ -1,0 +1,11 @@
+{
+  "plugin": [
+  ],
+  "wizard": {
+    "providers": {
+      "azure": false,
+      "office365": false
+    },
+    "offline": true
+  }
+}
