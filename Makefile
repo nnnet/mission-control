@@ -188,14 +188,14 @@ openclaw-update: openclaw-clone openclaw-build openclaw-restart  ## git pull ope
 	@echo "==> openclaw updated to $$(cd $(OPENCLAW_SRC) && git rev-parse --short HEAD); gateway restarted."
 
 .PHONY: openclaw-up
-openclaw-up:  ## Start openclaw gateway + control UI (ports 18789, 18791)
+openclaw-up:  ## Start openclaw gateway + control UI + local auto-pair (ports 18789, 18791)
 	@cd $(PROJECT_DIR)
 	if [ ! -f "$(OPENCLAW_SRC)/dist/index.js" ] || [ ! -f "$(OPENCLAW_SRC)/dist/control-ui/index.html" ]; then \
 	  echo "openclaw dist/control-ui assets missing; building first..."; \
 	  $(MAKE) openclaw-build; \
 	fi
 	mkdir -p .openclaw-data/credentials .mc-openclaw/credentials
-	$(COMPOSE_OC) up -d openclaw-gateway openclaw-control-ui
+	$(COMPOSE_OC) up -d openclaw-gateway openclaw-control-ui openclaw-control-ui-autopair
 	@echo "openclaw-gateway is starting on http://127.0.0.1:18789"
 	@echo "openclaw-control-ui is starting on http://127.0.0.1:$${OPENCLAW_CONTROL_UI_PORT:-18791}"
 	@echo "Wait 30-60s for healthy status, then run: make openclaw-status"
@@ -248,6 +248,17 @@ openclaw-status:  ## Quick health check (gateway + control UI + token/linkage)
 	  docker exec $(CONTAINER) openclaw gateway call health --json --timeout 8000 >/dev/null 2>&1 && echo "OK" || echo "FAIL"; \
 	else \
 	  echo "MC->Gateway: mission-control container not running"; \
+	fi
+	@if [ -f .openclaw-data/devices/pending.json ]; then \
+	  printf "Pending pair: "; \
+	  python3 -c "import json,pathlib; p=pathlib.Path('.openclaw-data/devices/pending.json'); d=json.loads(p.read_text() or '{}'); print(len(d))"; \
+	else \
+	  echo "Pending pair: pending.json missing"; \
+	fi
+	@if docker ps --format '{{.Names}}' | grep -q '^mc-openclaw-control-ui-autopair$$'; then \
+	  echo "Auto-pair:    running (local control-ui requests)"; \
+	else \
+	  echo "Auto-pair:    NOT running"; \
 	fi
 
 .PHONY: openclaw-onboard

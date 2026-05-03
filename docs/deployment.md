@@ -118,6 +118,18 @@ MC inside Docker needs to reach the gateway running on the host. There are **two
 If your gateway runs in **another container**, put both on the same Docker network and set
 `OPENCLAW_GATEWAY_HOST` to the gateway container name.
 
+### Local Security Scan Expectations (HTTP dev vs HTTPS prod)
+
+For local Docker development over plain `http://`, the following defaults are expected:
+
+- Keep `MC_COOKIE_SECURE` unset
+- Keep `MC_ENABLE_HSTS` unset
+- Use `OPENCLAW_GATEWAY_HOST=host.docker.internal` when MC runs in Docker and gateway runs on host
+
+`MC_COOKIE_SECURE=1` and `MC_ENABLE_HSTS=1` are HTTPS-only hardening flags. Enabling them on plain HTTP can break login/session behavior and create misleading local warnings.
+
+Mission Control's security scan treats `host.docker.internal` as a valid local Docker topology (not a public exposure) and should not be interpreted as a production misconfiguration by itself.
+
 ### Persistent Data
 
 SQLite database is stored in `/app/.data/` inside the container. Mount a volume to persist data across restarts:

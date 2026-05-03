@@ -224,6 +224,23 @@ services:
       retries: 5
       start_period: 10s
 
+  openclaw-control-ui-autopair:
+    image: node:24-bookworm
+    container_name: mc-openclaw-control-ui-autopair
+    restart: unless-stopped
+    init: true
+    user: "1000:1000"
+    depends_on:
+      - openclaw-gateway
+    working_dir: /app
+    environment:
+      OPENCLAW_LOCAL_DEV_AUTO_APPROVE: "1"
+      OPENCLAW_CONTROL_UI_AUTO_APPROVE_INTERVAL_MS: ${OPENCLAW_CONTROL_UI_AUTO_APPROVE_INTERVAL_MS:-1000}
+    volumes:
+      - ./scripts:/app/scripts:ro
+      - ./.openclaw-data:/app/.openclaw-data:rw
+    entrypoint: ["node", "scripts/openclaw-auto-approve-control-ui.mjs", "--watch"]
+
 volumes:
   openclaw-pnpm-store:
   openclaw-bun-cache:

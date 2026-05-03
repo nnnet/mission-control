@@ -21,6 +21,7 @@
 - Added idempotent OpenClaw state bootstrap at startup/invocation boundaries: gateway startup now hard-sets `gateway.mode=local` in `.openclaw-data/openclaw.json`, and MC CLI shim now ensures `.mc-openclaw/openclaw.json` contains `gateway.mode=local` before every call.
 - Added explicit credential-dir bootstrap for both state roots (`.openclaw-data/credentials` and `.mc-openclaw/credentials`) to remove OAuth-dir absence noise.
 - Added separate OpenClaw Control UI container (`mc-openclaw-control-ui`) serving `openclaw-src/dist/control-ui` on dedicated host port `OPENCLAW_CONTROL_UI_PORT` (default `18791`).
+- Added local-only Control UI device auto-approval sidecar (`mc-openclaw-control-ui-autopair`) that watches pending pair requests and auto-approves only local Docker Control UI requests (`clientId=openclaw-control-ui`, private/loopback IP, `gateway.mode=local`).
 
 ## Notes
 *Additional context and observations*
@@ -32,6 +33,7 @@
 - OpenClaw gateway logs show `gateway.auth.token` surface inactive warning even with token env var configured.
 - `bd doctor --fix` requires `--yes` for non-interactive; database still not reachable (dolt server missing `mission_control` db on 127.0.0.1:13870), so bd tasks cannot be created yet.
 - Gateway container has `/home/node/.openclaw/canvas/index.html` but no `/home/node/.openclaw/control-ui` directory (likely source of “Control UI assets are missing” warning).
+- Control UI connect failure root cause: pending device requests from `openclaw-control-ui` were not auto-approved in local Docker, leaving requestIds stuck in `.openclaw-data/devices/pending.json` and causing `device pairing required` on every new browser identity.
 
 ## Reproduce
 <!-- beads-phase-id: TBD -->
@@ -158,6 +160,20 @@
 - `Makefile`
   - `openclaw-up` now verifies `dist/index.js` and `dist/control-ui/index.html` instead of nonexistent image sentinel, pre-creates both credentials dirs, and starts gateway + dedicated control UI.
   - `openclaw-status` now checks gateway HTTP, control UI HTTP, MC OAuth-dir presence, and MC→gateway health call viability.
+- `scripts/openclaw-auto-approve-control-ui.mjs`
+  - New local-dev auto-approval worker for Control UI pairing requests.
+  - Idempotent behavior: only pending requests are processed; already-paired devices reuse token state.
+  - Safety boundaries: requires `OPENCLAW_LOCAL_DEV_AUTO_APPROVE=1`, `gateway.mode=local`, and local/private source IP.
+- `docker-compose-openclaw.yml`
+  - Added `openclaw-control-ui-autopair` service to run the worker continuously in local OpenClaw stack.
+- `Makefile`
+  - `openclaw-up` now starts `openclaw-control-ui-autopair`.
+  - `openclaw-status` now reports pending pairing count + auto-pair service state.
+- `src/lib/security-scan.ts`
+  - HSTS/secure-cookie checks now pass by default on local HTTP and only warn when HTTPS hardening flags imply HTTPS posture.
+  - `OPENCLAW_GATEWAY_HOST=host.docker.internal` now classified as valid Docker-local topology (not a critical misconfiguration).
+- `docs/deployment.md`
+  - Added explicit local-vs-HTTPS defaults to reduce HSTS/cookie/gateway-host warning confusion.
 - `docker-compose.yml`
   - Added explicit `OPENCLAW_CONFIG_PATH=/home/nextjs/.openclaw/openclaw.json` for prod Mission Control container.
 - `.env.openclaw.example`
@@ -233,8 +249,20 @@
      - `http://127.0.0.1:18791`
    - `curl -sS -o /dev/null -w "localhost 18791 -> %{http_code}" http://localhost:18791/`
      - `localhost 18791 -> 200`
-   - `curl -sS -o /dev/null -w "127.0.0.1 18791 -> %{http_code}" http://127.0.0.1:18791/`
-     - `127.0.0.1 18791 -> 200`
+    - `curl -sS -o /dev/null -w "127.0.0.1 18791 -> %{http_code}" http://127.0.0.1:18791/`
+      - `127.0.0.1 18791 -> 200`
+
+9. Local auto-approval verification (Control UI pairing)
+   - `make openclaw-up`
+     - Started `mc-openclaw-gateway`, `mc-openclaw-control-ui`, and `mc-openclaw-control-ui-autopair`.
+   - `make openclaw-status`
+     - Includes `Pending pair: 0` and `Auto-pair: running (local control-ui requests)`.
+   - `docker logs mc-openclaw-control-ui-autopair --since 5m`
+     - Shows auto-approval events for pending request ids and periodic sweep status.
+   - `python3 - <<'PY' ...` state check (`.openclaw-data/devices/pending.json`)
+     - Confirms pending requests are removed after approval.
+   - `curl -fsS http://127.0.0.1:18791/healthz`
+     - Returns gateway health through Control UI route (`{"ok":true...}`) while pairing queue remains clear.
 
 ## Finalize
 <!-- beads-phase-id: TBD -->
