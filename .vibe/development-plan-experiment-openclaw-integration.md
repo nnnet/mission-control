@@ -18,6 +18,9 @@
 - Production `mission-control` container now gets OpenClaw CLI via compose-mounted executable shim (`scripts/openclaw-cli-shim.py` -> `/home/nextjs/.local/bin/openclaw`) plus mounted `openclaw-src` runtime (`/opt/openclaw-src`), so `docker exec mission-control openclaw ...` works without rebuilding MC image.
 - OpenClaw gateway startup now creates `/home/node/.openclaw/credentials` before launch, eliminating noisy OAuth-dir absence warnings for prod linkage.
 - Doctor parsing in Mission Control now treats `Telegram DMs: locked (channels.telegram.dmPolicy="pairing")` as expected-security informational output, reducing false-warning semantics.
+- Added idempotent OpenClaw state bootstrap at startup/invocation boundaries: gateway startup now hard-sets `gateway.mode=local` in `.openclaw-data/openclaw.json`, and MC CLI shim now ensures `.mc-openclaw/openclaw.json` contains `gateway.mode=local` before every call.
+- Added explicit credential-dir bootstrap for both state roots (`.openclaw-data/credentials` and `.mc-openclaw/credentials`) to remove OAuth-dir absence noise.
+- Added separate OpenClaw Control UI container (`mc-openclaw-control-ui`) serving `openclaw-src/dist/control-ui` on dedicated host port `OPENCLAW_CONTROL_UI_PORT` (default `18791`).
 
 ## Notes
 *Additional context and observations*
@@ -87,6 +90,8 @@
 - **OAuth dir warning**: `openclaw-src/src/commands/doctor-state-integrity.ts` logs the warning only when OAuth dir is absent *and* no WhatsApp/pairing channel config is active; informational unless those channels are configured.
 - **Telegram dmPolicy message**: `pairing` is the default dmPolicy (see hardening guide and schema defaults), so “DMs locked” is expected behavior unless explicitly configured to `open`/`allowlist`.
 - **Prod CLI availability root cause**: production compose had no mounted OpenClaw runtime path (`openclaw-src`) and no mounted shim on PATH, so `openclaw` was unavailable in `mission-control` container.
+- **gateway.mode blocked start root cause**: MC-side state file `.mc-openclaw/openclaw.json` lacked `gateway.mode`, which can trip stricter OpenClaw gateway/CLI checks and trigger “gateway.mode is unset” warnings.
+- **Control UI separation gap**: existing compose only exposed gateway daemon endpoints, so there was no dedicated HTTP service/port for control UI assets.
 
 ## Fix
 <!-- beads-phase-id: TBD -->
@@ -110,6 +115,22 @@
   - Aligned CLI sidecar plugin stage dir to `/home/node/.openclaw/plugin-runtime-deps` (same state volume strategy as gateway).
 - `src/lib/openclaw-doctor.ts`
   - Treats `Telegram DMs: locked (channels.telegram.dmPolicy="pairing")` as expected/informational line so default-secure posture does not appear as actionable warning in MC parsing.
+- `docker-compose-openclaw.yml`
+  - Added idempotent prestart config bootstrap to force `gateway.mode="local"` before gateway launch.
+  - Added `OPENCLAW_CONFIG_PATH` for gateway and CLI sidecar for deterministic config resolution.
+  - Added `openclaw-control-ui` service (nginx) on dedicated host port `${OPENCLAW_CONTROL_UI_PORT:-18791}` serving `openclaw-src/dist/control-ui`.
+- `scripts/openclaw-cli-shim.py`
+  - Added MC-side state bootstrap before command forwarding:
+    - ensure `OPENCLAW_STATE_DIR` exists
+    - ensure `~/.openclaw/credentials` exists
+    - ensure `gateway.mode="local"` in config
+- `Makefile`
+  - `openclaw-up` now verifies `dist/index.js` and `dist/control-ui/index.html` instead of nonexistent image sentinel, pre-creates both credentials dirs, and starts gateway + dedicated control UI.
+  - `openclaw-status` now checks gateway HTTP, control UI HTTP, MC OAuth-dir presence, and MC→gateway health call viability.
+- `docker-compose.yml`
+  - Added explicit `OPENCLAW_CONFIG_PATH=/home/nextjs/.openclaw/openclaw.json` for prod Mission Control container.
+- `.env.openclaw.example`
+  - Added `OPENCLAW_CONTROL_UI_PORT` variable documentation/default.
 
 ## Verify
 <!-- beads-phase-id: TBD -->
@@ -129,20 +150,24 @@
    - Completed successfully (container recreated, `/login` readiness reached 200).
 
 3. `make openclaw-up`
-   - Completed successfully (gateway started on `http://127.0.0.1:18789`).
+   - Completed successfully (gateway started on `http://127.0.0.1:18789`, control UI on `http://127.0.0.1:18791`).
 
-4. `docker exec mission-control openclaw gateway call health --json --timeout 8000`
+4. `make openclaw-status`
+   - Completed successfully:
+     - `Gateway HTTP: 200`
+     - `Control UI: 200`
+     - `OAuth dir: .mc-openclaw/credentials present`
+     - `MC->Gateway: OK`
+
+5. `docker exec mission-control openclaw gateway call health --json --timeout 8000`
    - Completed successfully (JSON payload with `"ok": true`).
 
-5. Additional checks
-   - `docker exec mission-control sh -c 'which openclaw && ls -l /home/nextjs/.local/bin/openclaw'`
-     - Output confirms path and executable mode:
-       - `/home/nextjs/.local/bin/openclaw`
-       - `-rwxrwxr-x ... /home/nextjs/.local/bin/openclaw`
-   - `make openclaw-status` -> `Gateway HTTP: 200`, config present, token set.
-   - `docker logs mc-openclaw-gateway --tail 200`
-     - No `Control UI assets are missing` warning observed after build update.
-     - No `OAuth dir not present` warning observed after credential-dir bootstrap.
+6. Additional checks
+   - `curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:18791/` -> `200` (dedicated control UI port live).
+   - `docker logs mc-openclaw-gateway --since 10m | rg "OAuth dir not present|Control UI assets are missing|gateway.mode is unset"`
+     - No matches (targeted warning signatures absent in current startup window).
+   - `pnpm vitest run src/lib/__tests__/openclaw-doctor.test.ts`
+     - Passed (`9/9`) confirming expected parser handling of informational security output.
 
 ## Finalize
 <!-- beads-phase-id: TBD -->

@@ -80,6 +80,7 @@ services:
       # /var/lib/openclaw/* path because Docker named volumes are root-owned
       # and our container runs as uid 1000.
       OPENCLAW_PLUGIN_STAGE_DIR: /home/node/.openclaw/plugin-runtime-deps
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
@@ -111,6 +112,25 @@ services:
     command:
       - >
         mkdir -p /home/node/.openclaw/credentials &&
+        node -e "
+          const fs=require('node:fs');
+          const path=require('node:path');
+          const configPath=process.env.OPENCLAW_CONFIG_PATH||'/home/node/.openclaw/openclaw.json';
+          fs.mkdirSync(path.dirname(configPath), { recursive: true });
+          let config={};
+          if (fs.existsSync(configPath)) {
+            try {
+              const parsed=JSON.parse(fs.readFileSync(configPath, 'utf8'));
+              if (parsed && typeof parsed==='object' && !Array.isArray(parsed)) config=parsed;
+            } catch (error) {
+              throw new Error('Invalid OpenClaw config JSON at '+configPath+': '+error.message);
+            }
+          }
+          const gateway=(config.gateway && typeof config.gateway==='object' && !Array.isArray(config.gateway)) ? config.gateway : {};
+          gateway.mode='local';
+          config.gateway=gateway;
+          fs.writeFileSync(configPath, JSON.stringify(config, null, 2)+'\n');
+        " &&
         exec node dist/index.js gateway --bind "${OPENCLAW_GATEWAY_BIND:-lan}" --port 18789
 
     healthcheck:
@@ -149,6 +169,7 @@ services:
       BROWSER: echo
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_PLUGIN_STAGE_DIR: /home/node/.openclaw/plugin-runtime-deps
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
@@ -166,6 +187,25 @@ services:
     entrypoint: ["node", "dist/index.js"]
     depends_on:
       - openclaw-gateway
+
+  openclaw-control-ui:
+    image: nginx:1.27-alpine
+    container_name: mc-openclaw-control-ui
+    restart: unless-stopped
+    depends_on:
+      - openclaw-gateway
+    ports:
+      - "${OPENCLAW_CONTROL_UI_PORT:-18791}:80"
+    volumes:
+      - ./openclaw-src/dist/control-ui:/usr/share/nginx/html:ro
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "wget -q -O /dev/null http://127.0.0.1/ || exit 1"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 volumes:
   openclaw-pnpm-store:

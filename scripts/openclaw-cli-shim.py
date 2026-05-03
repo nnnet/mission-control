@@ -44,9 +44,43 @@ from __future__ import annotations
 import json
 import os
 import sys
+from pathlib import Path
 from typing import List, Optional
 
 OPENCLAW_DIST = "/opt/openclaw-src/dist/index.js"
+
+
+def resolve_openclaw_paths() -> tuple[Path, Path, Path]:
+    state_dir = Path(os.environ.get("OPENCLAW_STATE_DIR", str(Path.home() / ".openclaw"))).expanduser()
+    config_path = Path(os.environ.get("OPENCLAW_CONFIG_PATH", str(state_dir / "openclaw.json"))).expanduser()
+    credentials_dir = state_dir / "credentials"
+    return state_dir, config_path, credentials_dir
+
+
+def ensure_openclaw_state_defaults() -> None:
+    state_dir, config_path, credentials_dir = resolve_openclaw_paths()
+    state_dir.mkdir(parents=True, exist_ok=True)
+    credentials_dir.mkdir(parents=True, exist_ok=True)
+
+    config: dict = {}
+    if config_path.exists():
+        try:
+            loaded = json.loads(config_path.read_text())
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Invalid OpenClaw config JSON at {config_path}: {exc}") from exc
+        if isinstance(loaded, dict):
+            config = loaded
+
+    gateway = config.get("gateway")
+    if not isinstance(gateway, dict):
+        gateway = {}
+        config["gateway"] = gateway
+
+    if gateway.get("mode") != "local":
+        gateway["mode"] = "local"
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n")
 
 
 def find_flag_value(args: List[str], flag: str) -> Optional[str]:
@@ -149,6 +183,7 @@ def rewrite(args: List[str]) -> List[str]:
 
 
 def main() -> int:
+    ensure_openclaw_state_defaults()
     raw = sys.argv[1:]
     rewritten = rewrite(raw)
     if rewritten is not raw and os.environ.get("OPENCLAW_SHIM_DEBUG"):

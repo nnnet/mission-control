@@ -188,18 +188,20 @@ openclaw-update: openclaw-clone openclaw-build openclaw-restart  ## git pull ope
 	@echo "==> openclaw updated to $$(cd $(OPENCLAW_SRC) && git rev-parse --short HEAD); gateway restarted."
 
 .PHONY: openclaw-up
-openclaw-up:  ## Start openclaw gateway daemon (port 18789); auto-builds if image missing
+openclaw-up:  ## Start openclaw gateway + control UI (ports 18789, 18791)
 	@cd $(PROJECT_DIR)
-	if ! docker image inspect mc-openclaw:local >/dev/null 2>&1; then \
-	  echo "image mc-openclaw:local not present; building first..."; \
+	if [ ! -f "$(OPENCLAW_SRC)/dist/index.js" ] || [ ! -f "$(OPENCLAW_SRC)/dist/control-ui/index.html" ]; then \
+	  echo "openclaw dist/control-ui assets missing; building first..."; \
 	  $(MAKE) openclaw-build; \
 	fi
-	$(COMPOSE_OC) up -d openclaw-gateway
+	mkdir -p .openclaw-data/credentials .mc-openclaw/credentials
+	$(COMPOSE_OC) up -d openclaw-gateway openclaw-control-ui
 	@echo "openclaw-gateway is starting on http://127.0.0.1:18789"
+	@echo "openclaw-control-ui is starting on http://127.0.0.1:$${OPENCLAW_CONTROL_UI_PORT:-18791}"
 	@echo "Wait 30-60s for healthy status, then run: make openclaw-status"
 
 .PHONY: openclaw-down
-openclaw-down:  ## Stop openclaw stack (MC keeps running on direct-API fallback)
+openclaw-down:  ## Stop openclaw stack (gateway + control UI)
 	@cd $(PROJECT_DIR)
 	$(COMPOSE_OC) down
 	@echo "openclaw stopped; MC dispatch falls back to direct API/CLI"
@@ -220,19 +222,32 @@ openclaw-ps:  ## Show openclaw container status
 	$(COMPOSE_OC) ps
 
 .PHONY: openclaw-status
-openclaw-status:  ## Quick health check (HTTP /healthz + token presence)
+openclaw-status:  ## Quick health check (gateway + control UI + token/linkage)
 	@cd $(PROJECT_DIR)
 	@printf "Gateway HTTP: "
 	@curl -fsS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:18789/healthz 2>&1 || echo "DOWN"
+	@printf "Control UI:   "
+	@curl -fsS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:$${OPENCLAW_CONTROL_UI_PORT:-18791}/ 2>&1 || echo "DOWN"
 	@if [ -f .openclaw-data/openclaw.json ]; then \
 	  echo "Config:       .openclaw-data/openclaw.json present"; \
 	else \
 	  echo "Config:       not yet generated (gateway may still be initializing)"; \
 	fi
+	@if [ -d .mc-openclaw/credentials ]; then \
+	  echo "OAuth dir:    .mc-openclaw/credentials present"; \
+	else \
+	  echo "OAuth dir:    .mc-openclaw/credentials missing"; \
+	fi
 	@if grep -q "^OPENCLAW_GATEWAY_TOKEN=." .env 2>/dev/null; then \
 	  echo "MC token:     set in .env"; \
 	else \
 	  echo "MC token:     NOT set in .env — copy from .openclaw-data/openclaw.json"; \
+	fi
+	@if docker ps --format '{{.Names}}' | grep -q '^$(CONTAINER)$$'; then \
+	  printf "MC->Gateway: "; \
+	  docker exec $(CONTAINER) openclaw gateway call health --json --timeout 8000 >/dev/null 2>&1 && echo "OK" || echo "FAIL"; \
+	else \
+	  echo "MC->Gateway: mission-control container not running"; \
 	fi
 
 .PHONY: openclaw-onboard
