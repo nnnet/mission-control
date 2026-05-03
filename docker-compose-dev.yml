@@ -15,10 +15,10 @@ services:
     image: mission-control-dev:latest
     container_name: mission-control-dev
     ports:
-      - "${MC_PORT:-7012}:3000"
+      - "${MC_PORT:-7012}:${PORT:-3000}"
     environment:
       - NODE_ENV=development
-      - PORT=3000
+      - PORT=${PORT:-3000}
       - PATH=/home/nextjs/.local/bin:/home/nextjs/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       - HOME=/home/nextjs
       - OPENCLAW_GATEWAY_HOST=${OPENCLAW_GATEWAY_HOST:-host.docker.internal}
@@ -133,7 +133,7 @@ services:
     # hardcodes `--hostname 127.0.0.1`, which would only listen on the loopback
     # inside the container (unreachable from the host port mapping). Going
     # through `pnpm exec` ensures we use the project's own next install.
-    command: ["pnpm", "exec", "next", "dev", "--hostname", "0.0.0.0", "--port", "3000"]
+    command: ["pnpm", "exec", "next", "dev", "--hostname", "0.0.0.0", "--port", "${PORT:-3000}"]
 
 volumes:
   mission-control_mc-data:

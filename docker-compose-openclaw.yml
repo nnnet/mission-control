@@ -74,6 +74,8 @@ services:
       TERM: xterm-256color
       TZ: ${OPENCLAW_TZ:-UTC}
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_NUMERIC_USER_ID: ${TELEGRAM_NUMERIC_USER_ID:-}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
       OPENCLAW_DISABLE_BONJOUR: ${OPENCLAW_DISABLE_BONJOUR:-1}
       # Plugin runtime stage dir lives under bind-mounted state so it inherits
@@ -106,8 +108,8 @@ services:
       - "host.docker.internal:host-gateway"
 
     ports:
-      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
-      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+      - "${OPENCLAW_GATEWAY_PORT:-18789}:${OPENCLAW_GATEWAY_INTERNAL_PORT:-18789}"
+      - "${OPENCLAW_BRIDGE_PORT:-18790}:${OPENCLAW_BRIDGE_INTERNAL_PORT:-18790}"
 
     entrypoint: ["bash", "-lc"]
     command:
@@ -131,16 +133,20 @@ services:
           const controlUi=(gateway.controlUi && typeof gateway.controlUi==='object' && !Array.isArray(gateway.controlUi)) ? gateway.controlUi : {};
           const trimEnv=(name)=>String(process.env[name]||'').trim();
           const gatewayToken=trimEnv('OPENCLAW_GATEWAY_TOKEN');
+          const telegramBotToken=trimEnv('TELEGRAM_BOT_TOKEN');
           const telegramOwnerId=trimEnv('TELEGRAM_NUMERIC_USER_ID');
+          const commands=(config.commands && typeof config.commands==='object' && !Array.isArray(config.commands)) ? config.commands : {};
           const isNumericTelegramUserId=/^[1-9][0-9]*$/.test(telegramOwnerId);
+          const gatewayPort=trimEnv('OPENCLAW_GATEWAY_INTERNAL_PORT') || '18789';
+          const controlUiPort=trimEnv('OPENCLAW_CONTROL_UI_PORT') || '18791';
           const normalizedOrigins=Array.isArray(controlUi.allowedOrigins)
             ? controlUi.allowedOrigins.filter((origin)=>typeof origin==='string' && origin.trim().length>0)
             : [];
           const requiredOrigins=[
-            'http://localhost:18789',
-            'http://127.0.0.1:18789',
-            'http://localhost:18791',
-            'http://127.0.0.1:18791',
+            'http://localhost:'+gatewayPort,
+            'http://127.0.0.1:'+gatewayPort,
+            'http://localhost:'+controlUiPort,
+            'http://127.0.0.1:'+controlUiPort,
           ];
           for (const origin of requiredOrigins) {
             if (!normalizedOrigins.includes(origin)) normalizedOrigins.push(origin);
@@ -160,31 +166,51 @@ services:
           }
           config.gateway=gateway;
 
-          if (isNumericTelegramUserId) {
+          if (telegramBotToken.length>0 || isNumericTelegramUserId) {
             const channels=(config.channels && typeof config.channels==='object' && !Array.isArray(config.channels)) ? config.channels : {};
             const telegram=(channels.telegram && typeof channels.telegram==='object' && !Array.isArray(channels.telegram)) ? channels.telegram : {};
-            const allowFrom=Array.isArray(telegram.allowFrom)
-              ? telegram.allowFrom
-                  .map((entry)=>String(entry||'').trim())
-                  .filter((entry)=>entry.length>0)
-              : [];
-            if (!allowFrom.includes(telegramOwnerId)) allowFrom.push(telegramOwnerId);
-            telegram.allowFrom=allowFrom;
-            telegram.dmPolicy='allowlist';
+            telegram.enabled=true;
+            if (telegramBotToken.length>0) {
+              telegram.botToken={
+                source:'env',
+                provider:'default',
+                id:'TELEGRAM_BOT_TOKEN',
+              };
+            }
+            if (isNumericTelegramUserId) {
+              const ownerAllowFrom=Array.isArray(commands.ownerAllowFrom)
+                ? commands.ownerAllowFrom
+                    .map((entry)=>String(entry||'').trim())
+                    .filter((entry)=>entry.length>0)
+                : [];
+              const telegramOwnerEntry='telegram:'+telegramOwnerId;
+              if (!ownerAllowFrom.includes(telegramOwnerEntry)) ownerAllowFrom.push(telegramOwnerEntry);
+              commands.ownerAllowFrom=ownerAllowFrom;
+              const allowFrom=Array.isArray(telegram.allowFrom)
+                ? telegram.allowFrom
+                    .map((entry)=>String(entry||'').trim())
+                    .filter((entry)=>entry.length>0)
+                : [];
+              if (!allowFrom.includes(telegramOwnerId)) allowFrom.push(telegramOwnerId);
+              telegram.allowFrom=allowFrom;
+              telegram.dmPolicy='allowlist';
+            }
             channels.telegram=telegram;
             config.channels=channels;
           }
 
+          config.commands=commands;
+
           fs.writeFileSync(configPath, JSON.stringify(config, null, 2)+'\n');
         " &&
-        exec node dist/index.js gateway --bind "${OPENCLAW_GATEWAY_BIND:-lan}" --port 18789
+        exec node dist/index.js gateway --bind "${OPENCLAW_GATEWAY_BIND:-lan}" --port "${OPENCLAW_GATEWAY_INTERNAL_PORT:-18789}"
 
     healthcheck:
       test:
         - "CMD"
         - "node"
         - "-e"
-        - "fetch('http://127.0.0.1:18789/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        - "fetch('http://127.0.0.1:'+String(process.env.OPENCLAW_GATEWAY_INTERNAL_PORT||'18789')+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
       interval: 30s
       timeout: 5s
       retries: 5
@@ -214,6 +240,8 @@ services:
       TZ: ${OPENCLAW_TZ:-UTC}
       BROWSER: echo
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_NUMERIC_USER_ID: ${TELEGRAM_NUMERIC_USER_ID:-}
       OPENCLAW_PLUGIN_STAGE_DIR: /home/node/.openclaw/plugin-runtime-deps
       OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

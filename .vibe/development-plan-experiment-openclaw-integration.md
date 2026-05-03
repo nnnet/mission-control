@@ -184,6 +184,19 @@
   - Added explicit `OPENCLAW_CONFIG_PATH=/home/nextjs/.openclaw/openclaw.json` for prod Mission Control container.
 - `.env.openclaw.example`
   - Added `OPENCLAW_CONTROL_UI_PORT` variable documentation/default.
+- `Makefile`
+  - Removed hardcoded startup/status endpoints and now loads runtime parameters from `.env` / `.env.openclaw` (`MC_URL_SCHEME`, `MC_HOST`, `MC_PORT`, `OPENCLAW_STATUS_HOST`, `OPENCLAW_GATEWAY_PORT`, `OPENCLAW_CONTROL_UI_PORT`).
+  - `openclaw-status` token check now accepts `OPENCLAW_GATEWAY_TOKEN` from either `.env` or `.env.openclaw`.
+- `docker-compose-openclaw.yml`
+  - Replaced hardcoded gateway/bridge startup ports with env-driven host/internal port mappings (`OPENCLAW_GATEWAY_PORT`, `OPENCLAW_BRIDGE_PORT`, `OPENCLAW_GATEWAY_INTERNAL_PORT`, `OPENCLAW_BRIDGE_INTERNAL_PORT`).
+  - Gateway launch and healthcheck now use `OPENCLAW_GATEWAY_INTERNAL_PORT` (no embedded literal port).
+  - Telegram bootstrap now consumes existing env keys `TELEGRAM_BOT_TOKEN` + `TELEGRAM_NUMERIC_USER_ID`, projects `channels.telegram.botToken` from env, and enforces secure allowlist ownership (`commands.ownerAllowFrom`, `channels.telegram.allowFrom`, `channels.telegram.dmPolicy=allowlist`) when numeric owner id exists.
+- `docker-compose-dev.yml`
+  - Replaced dev hardcoded container port wiring with env interpolation (`PORT`) for port mapping and Next.js dev command.
+- `.env.example` / `.env.openclaw.example`
+  - Added explicit Make+Compose runtime keys and Telegram/OpenClaw keys required for env-driven startup.
+- `docs/deployment.md` / `docs/openclaw-telegram-onboarding.md`
+  - Added concise “what to set in .env” operator blocks for Make-first startup and Telegram ownership bootstrap.
 
 ## Verify
 <!-- beads-phase-id: TBD -->
@@ -277,8 +290,37 @@
       - First connect attempt returns temporary `NOT_PAIRED` once, auto-approver resolves locally, second connect succeeds and UI reaches full chat shell (`connected=true`, `control-ui.rpc connect ok=true`).
     - Gateway log evidence (post-fix)
       - Temporary `4008 connect failed` can still occur on stale reconnect attempts, but gateway then accepts a paired reconnect and continues serving successful RPCs (`sessions.list`, `chat.history`, `health`) on the active webchat connection.
-    - Telegram config projection check
-      - `.openclaw-data/openclaw.json` now includes `channels.telegram.dmPolicy="allowlist"` and `channels.telegram.allowFrom` containing `${TELEGRAM_NUMERIC_USER_ID}` when env var is set.
+     - Telegram config projection check
+       - `.openclaw-data/openclaw.json` now includes `channels.telegram.dmPolicy="allowlist"` and `channels.telegram.allowFrom` containing `${TELEGRAM_NUMERIC_USER_ID}` when env var is set.
+
+11. Mission Control runtime recovery verification (2026-05-03)
+    - `docker compose ps` / `make dev-ps` / `make ps`
+      - `mission-control` confirmed mapped on `0.0.0.0:7012->7012/tcp`; no port conflict detected.
+    - `docker compose logs --tail=200 mission-control`
+      - Service showed normal Next.js boot + healthy scheduler init (no fatal runtime errors).
+    - `docker compose restart mission-control`
+      - Container restarted cleanly to recover runtime session.
+    - `curl -i http://127.0.0.1:7012/login` and `make status`
+      - HTTP `200 OK` on `/login`; status check returned `URL: 200 → http://127.0.0.1:7012/login`.
+
+12. Env-driven Make/Compose refactor verification (2026-05-03)
+    - `make down && make up`
+      - Completed successfully; `/login` reached HTTP 200 via Make-computed URL from `.env`.
+    - `make openclaw-down && make openclaw-up`
+      - Completed successfully; gateway/UI started with env-driven ports.
+    - `make status`
+      - Returned HTTP `200` for `http://127.0.0.1:7012/login`.
+    - `make openclaw-status`
+      - Returned `Gateway HTTP: 200` and `Control UI: 200`.
+    - `curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:7012/login`
+      - `200`
+    - `curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:18791/`
+      - `200`
+    - `.openclaw-data/openclaw.json` inspection
+      - `commands.ownerAllowFrom` includes `telegram:${TELEGRAM_NUMERIC_USER_ID}`.
+      - `channels.telegram.allowFrom` includes `${TELEGRAM_NUMERIC_USER_ID}`.
+      - `channels.telegram.dmPolicy` is `allowlist`.
+      - `channels.telegram.botToken.id` resolves to `TELEGRAM_BOT_TOKEN`.
 
 ## Finalize
 <!-- beads-phase-id: TBD -->

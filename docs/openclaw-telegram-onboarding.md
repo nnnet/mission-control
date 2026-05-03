@@ -6,6 +6,18 @@ If your bot token is set but Mission Control/OpenClaw still shows:
 
 that is **expected**. `pairing` is the secure default and is informational, not a failure.
 
+## Required `.env` keys
+
+```env
+TELEGRAM_BOT_TOKEN=<your-bot-token>
+TELEGRAM_NUMERIC_USER_ID=<your-numeric-telegram-id>
+```
+
+When both are present, OpenClaw bootstrap keeps DM access scoped by setting:
+- `commands.ownerAllowFrom += ["telegram:<TELEGRAM_NUMERIC_USER_ID>"]`
+- `channels.telegram.allowFrom += ["<TELEGRAM_NUMERIC_USER_ID>"]`
+- `channels.telegram.dmPolicy = "allowlist"`
+
 ## 1) Find your Telegram user ID
 
 1. Open Telegram and send any message to your bot (for example `/start`).

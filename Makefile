@@ -5,6 +5,10 @@ SHELL := /bin/bash
 .ONESHELL:
 .SHELLFLAGS := -eu -o pipefail -c
 
+-include .env
+-include .env.openclaw
+export
+
 PROJECT_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 COMPOSE     := docker compose
 COMPOSE_DEV := docker compose -f docker-compose-dev.yml
@@ -14,7 +18,14 @@ OPENCLAW_REPO := https://github.com/openclaw/openclaw.git
 OPENCLAW_REF  := main
 CONTAINER   := mission-control
 CONTAINER_DEV := mission-control-dev
-URL         := http://127.0.0.1:7012
+MC_URL_SCHEME ?= http
+MC_HOST ?= 127.0.0.1
+MC_PORT ?= 7012
+URL         := $(MC_URL_SCHEME)://$(MC_HOST):$(MC_PORT)
+
+OPENCLAW_STATUS_HOST ?= 127.0.0.1
+OPENCLAW_GATEWAY_PORT ?= 18789
+OPENCLAW_CONTROL_UI_PORT ?= 18791
 
 .DEFAULT_GOAL := help
 
@@ -196,8 +207,8 @@ openclaw-up:  ## Start openclaw gateway + control UI + local auto-pair (ports 18
 	fi
 	mkdir -p .openclaw-data/credentials .mc-openclaw/credentials
 	$(COMPOSE_OC) up -d openclaw-gateway openclaw-control-ui openclaw-control-ui-autopair
-	@echo "openclaw-gateway is starting on http://127.0.0.1:18789"
-	@echo "openclaw-control-ui is starting on http://127.0.0.1:$${OPENCLAW_CONTROL_UI_PORT:-18791}"
+	@echo "openclaw-gateway is starting on http://$(OPENCLAW_STATUS_HOST):$(OPENCLAW_GATEWAY_PORT)"
+	@echo "openclaw-control-ui is starting on http://$(OPENCLAW_STATUS_HOST):$(OPENCLAW_CONTROL_UI_PORT)"
 	@echo "Wait 30-60s for healthy status, then run: make openclaw-status"
 
 .PHONY: openclaw-down
@@ -225,9 +236,9 @@ openclaw-ps:  ## Show openclaw container status
 openclaw-status:  ## Quick health check (gateway + control UI + token/linkage)
 	@cd $(PROJECT_DIR)
 	@printf "Gateway HTTP: "
-	@curl -fsS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:18789/healthz 2>&1 || echo "DOWN"
+	@curl -fsS -o /dev/null -w "%{http_code}\n" "http://$(OPENCLAW_STATUS_HOST):$(OPENCLAW_GATEWAY_PORT)/healthz" 2>&1 || echo "DOWN"
 	@printf "Control UI:   "
-	@curl -fsS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:$${OPENCLAW_CONTROL_UI_PORT:-18791}/ 2>&1 || echo "DOWN"
+	@curl -fsS -o /dev/null -w "%{http_code}\n" "http://$(OPENCLAW_STATUS_HOST):$(OPENCLAW_CONTROL_UI_PORT)/" 2>&1 || echo "DOWN"
 	@if [ -f .openclaw-data/openclaw.json ]; then \
 	  echo "Config:       .openclaw-data/openclaw.json present"; \
 	else \
@@ -238,10 +249,10 @@ openclaw-status:  ## Quick health check (gateway + control UI + token/linkage)
 	else \
 	  echo "OAuth dir:    .mc-openclaw/credentials missing"; \
 	fi
-	@if grep -q "^OPENCLAW_GATEWAY_TOKEN=." .env 2>/dev/null; then \
-	  echo "MC token:     set in .env"; \
+	@if grep -q "^OPENCLAW_GATEWAY_TOKEN=." .env 2>/dev/null || grep -q "^OPENCLAW_GATEWAY_TOKEN=." .env.openclaw 2>/dev/null; then \
+	  echo "MC token:     set in .env/.env.openclaw"; \
 	else \
-	  echo "MC token:     NOT set in .env — copy from .openclaw-data/openclaw.json"; \
+	  echo "MC token:     NOT set in .env/.env.openclaw — copy from .openclaw-data/openclaw.json"; \
 	fi
 	@if docker ps --format '{{.Names}}' | grep -q '^$(CONTAINER)$$'; then \
 	  printf "MC->Gateway: "; \

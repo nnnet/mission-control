@@ -76,6 +76,31 @@ What `deploy:standalone` does:
 
 ## Production (Docker)
 
+Preferred operator flow (Make controls docker compose):
+
+```bash
+make down && make up
+make openclaw-down && make openclaw-up
+```
+
+Minimum `.env` / `.env.openclaw` keys for this flow:
+
+```env
+# .env
+MC_URL_SCHEME=http
+MC_HOST=127.0.0.1
+MC_PORT=7012
+OPENCLAW_GATEWAY_TOKEN=...
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_NUMERIC_USER_ID=123456789
+
+# .env.openclaw (or keep in .env)
+OPENCLAW_GATEWAY_PORT=18789
+OPENCLAW_CONTROL_UI_PORT=18791
+OPENCLAW_GATEWAY_INTERNAL_PORT=18789
+OPENCLAW_STATUS_HOST=127.0.0.1
+```
+
 ```bash
 docker compose up          # with gateway connectivity
 docker compose --profile standalone up   # without gateway (standalone mode)
@@ -161,11 +186,9 @@ What the default compose does for this case:
   renamed `nextjs`) so bind-mounted host files (typical Linux uid 1000) are
   read/written without `chown`.
 
-**Ports.** `docker-compose.yml` maps `${MC_PORT:-3000}` on the host to
-`${PORT:-3000}` in the container. The bundled `Makefile` defaults to
-`http://127.0.0.1:7012` for its readiness probe — set `MC_PORT=7012` in your
-`.env` if you use the Makefile, or change the Makefile's `URL :=` line to
-match your `MC_PORT`.
+**Ports.** `docker-compose.yml` maps `${MC_PORT}` on the host to `${PORT}` in
+the container. The bundled `Makefile` computes its readiness/status URL from
+`MC_URL_SCHEME`, `MC_HOST`, and `MC_PORT` loaded from `.env`.
 
 **uid mismatch.** If your host user has uid ≠ 1000 (common on macOS, or
 multi-user Linux), edit `docker-compose.yml`:
