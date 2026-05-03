@@ -142,6 +142,12 @@
   - Treats `Telegram DMs: locked (channels.telegram.dmPolicy="pairing")` as expected/informational line so default-secure posture does not appear as actionable warning in MC parsing.
 - `docker-compose-openclaw.yml`
   - Added idempotent prestart config bootstrap to force `gateway.mode="local"` before gateway launch.
+  - Extended prestart config bootstrap to enforce these Control UI origins in `gateway.controlUi.allowedOrigins` (without wildcarding):
+    - `http://localhost:18789`
+    - `http://127.0.0.1:18789`
+    - `http://localhost:18791`
+    - `http://127.0.0.1:18791`
+  - Merge behavior is idempotent: existing origins are preserved and required localhost/loopback entries are only appended when missing.
   - Added `OPENCLAW_CONFIG_PATH` for gateway and CLI sidecar for deterministic config resolution.
   - Added `openclaw-control-ui` service (nginx) on dedicated host port `${OPENCLAW_CONTROL_UI_PORT:-18791}` serving `openclaw-src/dist/control-ui`.
 - `scripts/openclaw-cli-shim.py`
@@ -209,9 +215,26 @@
      - `HTTP/1.1 200 OK` from nginx control-ui service.
    - `curl -I http://127.0.0.1:18791/healthz`
      - `HTTP/1.1 200 OK` proving 18791 route reaches gateway health endpoint.
-   - WebSocket sanity probe:
-     - `curl -i -H "Connection: Upgrade" -H "Upgrade: websocket" ... http://127.0.0.1:18791/ws`
-     - Response body from gateway stack: `Missing or invalid Sec-WebSocket-Key header` (request reached WS endpoint through proxy).
+    - WebSocket sanity probe:
+      - `curl -i -H "Connection: Upgrade" -H "Upgrade: websocket" ... http://127.0.0.1:18791/ws`
+      - Response body from gateway stack: `Missing or invalid Sec-WebSocket-Key header` (request reached WS endpoint through proxy).
+
+8. Origin allowlist bootstrap verification (focused fix)
+   - `make openclaw-up`
+     - Completed successfully (gateway + control UI up).
+   - `make openclaw-status`
+     - `Gateway HTTP: 200`
+     - `Control UI: 200`
+     - `MC->Gateway: OK`
+   - `jq -r '.gateway.controlUi.allowedOrigins[]' .openclaw-data/openclaw.json`
+     - `http://localhost:18789`
+     - `http://127.0.0.1:18789`
+     - `http://localhost:18791`
+     - `http://127.0.0.1:18791`
+   - `curl -sS -o /dev/null -w "localhost 18791 -> %{http_code}" http://localhost:18791/`
+     - `localhost 18791 -> 200`
+   - `curl -sS -o /dev/null -w "127.0.0.1 18791 -> %{http_code}" http://127.0.0.1:18791/`
+     - `127.0.0.1 18791 -> 200`
 
 ## Finalize
 <!-- beads-phase-id: TBD -->
