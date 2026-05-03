@@ -129,6 +129,10 @@ services:
           }
           const gateway=(config.gateway && typeof config.gateway==='object' && !Array.isArray(config.gateway)) ? config.gateway : {};
           const controlUi=(gateway.controlUi && typeof gateway.controlUi==='object' && !Array.isArray(gateway.controlUi)) ? gateway.controlUi : {};
+          const trimEnv=(name)=>String(process.env[name]||'').trim();
+          const gatewayToken=trimEnv('OPENCLAW_GATEWAY_TOKEN');
+          const telegramOwnerId=trimEnv('TELEGRAM_NUMERIC_USER_ID');
+          const isNumericTelegramUserId=/^[1-9][0-9]*$/.test(telegramOwnerId);
           const normalizedOrigins=Array.isArray(controlUi.allowedOrigins)
             ? controlUi.allowedOrigins.filter((origin)=>typeof origin==='string' && origin.trim().length>0)
             : [];
@@ -144,7 +148,33 @@ services:
           controlUi.allowedOrigins=normalizedOrigins;
           gateway.controlUi=controlUi;
           gateway.mode='local';
+          if (gatewayToken.length>0) {
+            gateway.auth={
+              mode:'token',
+              token:{
+                source:'env',
+                provider:'default',
+                id:'OPENCLAW_GATEWAY_TOKEN',
+              },
+            };
+          }
           config.gateway=gateway;
+
+          if (isNumericTelegramUserId) {
+            const channels=(config.channels && typeof config.channels==='object' && !Array.isArray(config.channels)) ? config.channels : {};
+            const telegram=(channels.telegram && typeof channels.telegram==='object' && !Array.isArray(channels.telegram)) ? channels.telegram : {};
+            const allowFrom=Array.isArray(telegram.allowFrom)
+              ? telegram.allowFrom
+                  .map((entry)=>String(entry||'').trim())
+                  .filter((entry)=>entry.length>0)
+              : [];
+            if (!allowFrom.includes(telegramOwnerId)) allowFrom.push(telegramOwnerId);
+            telegram.allowFrom=allowFrom;
+            telegram.dmPolicy='allowlist';
+            channels.telegram=telegram;
+            config.channels=channels;
+          }
+
           fs.writeFileSync(configPath, JSON.stringify(config, null, 2)+'\n');
         " &&
         exec node dist/index.js gateway --bind "${OPENCLAW_GATEWAY_BIND:-lan}" --port 18789

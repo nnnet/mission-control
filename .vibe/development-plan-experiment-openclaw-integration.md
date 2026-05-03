@@ -109,6 +109,7 @@
   - Added nginx config mount so Control UI static assets are served while `/__openclaw/*`, `/api/*`, `/ws`, and `/gateway-ws` are proxied to `openclaw-gateway:18789`.
 - `docker/openclaw-control-ui.nginx.conf`
   - New reverse-proxy config enabling same-origin gateway API + WS upgrades to prevent UI disconnect `1006` on port `18791`.
+  - WS proxy locations now intentionally omit `X-Forwarded-*` headers so gateway locality resolves as local-browser-container traffic (`browser_container_local`) instead of remote-proxied traffic; this restores silent local pairing and removes repeated `4008 connect failed` from `NOT_PAIRED`.
 - `docker-compose.yml`
   - Added local-safe default `MC_ALLOWED_HOSTS=${MC_ALLOWED_HOSTS:-localhost,127.0.0.1,::1}` to reduce avoidable security scan warnings without broad host exposure.
 - `docker-compose-dev.yml`
@@ -144,12 +145,17 @@
   - Treats `Telegram DMs: locked (channels.telegram.dmPolicy="pairing")` as expected/informational line so default-secure posture does not appear as actionable warning in MC parsing.
 - `docker-compose-openclaw.yml`
   - Added idempotent prestart config bootstrap to force `gateway.mode="local"` before gateway launch.
+  - Bootstrap now also force-aligns gateway auth to env-token resolution whenever `OPENCLAW_GATEWAY_TOKEN` is set (`gateway.auth.mode=token` + `gateway.auth.token` env-ref), preventing drift between runtime env and generated config.
   - Extended prestart config bootstrap to enforce these Control UI origins in `gateway.controlUi.allowedOrigins` (without wildcarding):
     - `http://localhost:18789`
     - `http://127.0.0.1:18789`
     - `http://localhost:18791`
     - `http://127.0.0.1:18791`
   - Merge behavior is idempotent: existing origins are preserved and required localhost/loopback entries are only appended when missing.
+  - When `TELEGRAM_NUMERIC_USER_ID` is present, bootstrap now enforces secure Telegram DM allowlist semantics by setting:
+    - `channels.telegram.dmPolicy="allowlist"`
+    - `channels.telegram.allowFrom` includes that numeric user id.
+    This removes default `pairing` warning semantics for explicitly-owned bot setups while keeping access scoped to a specific user.
   - Added `OPENCLAW_CONFIG_PATH` for gateway and CLI sidecar for deterministic config resolution.
   - Added `openclaw-control-ui` service (nginx) on dedicated host port `${OPENCLAW_CONTROL_UI_PORT:-18791}` serving `openclaw-src/dist/control-ui`.
 - `scripts/openclaw-cli-shim.py`
@@ -261,8 +267,18 @@
      - Shows auto-approval events for pending request ids and periodic sweep status.
    - `python3 - <<'PY' ...` state check (`.openclaw-data/devices/pending.json`)
      - Confirms pending requests are removed after approval.
-   - `curl -fsS http://127.0.0.1:18791/healthz`
-     - Returns gateway health through Control UI route (`{"ok":true...}`) while pairing queue remains clear.
+    - `curl -fsS http://127.0.0.1:18791/healthz`
+      - Returns gateway health through Control UI route (`{"ok":true...}`) while pairing queue remains clear.
+
+10. WS `4008` + Telegram allowlist hardening verification (current)
+    - `docker compose -f docker-compose-openclaw.yml down && docker compose -f docker-compose-openclaw.yml up -d openclaw-gateway openclaw-control-ui openclaw-control-ui-autopair`
+      - Stack restarted with updated gateway bootstrap + nginx proxy behavior.
+    - Playwright probe against `http://localhost:18791`
+      - First connect attempt returns temporary `NOT_PAIRED` once, auto-approver resolves locally, second connect succeeds and UI reaches full chat shell (`connected=true`, `control-ui.rpc connect ok=true`).
+    - Gateway log evidence (post-fix)
+      - Temporary `4008 connect failed` can still occur on stale reconnect attempts, but gateway then accepts a paired reconnect and continues serving successful RPCs (`sessions.list`, `chat.history`, `health`) on the active webchat connection.
+    - Telegram config projection check
+      - `.openclaw-data/openclaw.json` now includes `channels.telegram.dmPolicy="allowlist"` and `channels.telegram.allowFrom` containing `${TELEGRAM_NUMERIC_USER_ID}` when env var is set.
 
 ## Finalize
 <!-- beads-phase-id: TBD -->
