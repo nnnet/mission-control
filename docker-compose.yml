@@ -12,6 +12,10 @@ services:
       # If your gateway runs in another container, set this to the container name instead.
       - OPENCLAW_GATEWAY_HOST=${OPENCLAW_GATEWAY_HOST:-host.docker.internal}
       - OPENCLAW_GATEWAY_PORT=${OPENCLAW_GATEWAY_PORT:-18789}
+      - OPENCLAW_GATEWAY_URL=${OPENCLAW_GATEWAY_URL:-ws://host.docker.internal:18789}
+      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-}
+      - OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-1}
+      - OPENCLAW_STATE_DIR=/home/nextjs/.openclaw
       # Host CLIs (~/.local/bin) come first; container-baked fallbacks second.
       # Container HOME stays /home/nextjs; bind-mounts below project the host
       # user's $HOME contents into that path.
@@ -76,6 +80,12 @@ services:
       # path so paths the user sees on the host work identically in container).
       - /mnt:/mnt:rw
       - ${HOME}:${HOME}:rw
+      # OpenClaw CLI state + identity used by Mission Control server-side CLI calls.
+      - ./.mc-openclaw:/home/nextjs/.openclaw:rw
+      # OpenClaw runtime source consumed by /usr/local/bin/openclaw shim in prod image.
+      - ./openclaw-src:/opt/openclaw-src:ro
+      # OpenClaw CLI shim for server-side gateway calls in production stack.
+      - ./scripts/openclaw-cli-shim.py:/home/nextjs/.local/bin/openclaw:ro
       # Optional: mount your OpenClaw state directory read-only so Mission Control
       # can read agent configs and memory. Uncomment and adjust the host path:
       # - ${OPENCLAW_HOME:-~/.openclaw}:/run/openclaw:ro

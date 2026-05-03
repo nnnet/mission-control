@@ -27,6 +27,7 @@ function isSessionAgingLine(line: string): boolean {
 function isPositiveOrInstructionalLine(line: string): boolean {
   return /^no .* warnings? detected/i.test(line) ||
     /^no issues/i.test(line) ||
+    /^telegram dms:\s+locked \(channels\.telegram\.dmpolicy="pairing"\)/i.test(line) ||
     /^run:\s/i.test(line) ||
     /^all .* (healthy|ok|valid|passed)/i.test(line)
 }

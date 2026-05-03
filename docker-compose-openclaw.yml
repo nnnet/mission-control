@@ -53,6 +53,8 @@ services:
         pnpm install --frozen-lockfile
         echo "==> pnpm build"
         pnpm build
+        echo "==> pnpm ui:build"
+        pnpm ui:build
         echo "==> done — dist + node_modules populated under ./openclaw-src/"
 
   openclaw-gateway:
@@ -105,14 +107,11 @@ services:
       - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
 
+    entrypoint: ["bash", "-lc"]
     command:
-      - "node"
-      - "dist/index.js"
-      - "gateway"
-      - "--bind"
-      - "${OPENCLAW_GATEWAY_BIND:-lan}"
-      - "--port"
-      - "18789"
+      - >
+        mkdir -p /home/node/.openclaw/credentials &&
+        exec node dist/index.js gateway --bind "${OPENCLAW_GATEWAY_BIND:-lan}" --port 18789
 
     healthcheck:
       test:
@@ -149,7 +148,7 @@ services:
       TZ: ${OPENCLAW_TZ:-UTC}
       BROWSER: echo
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
-      OPENCLAW_PLUGIN_STAGE_DIR: /var/lib/openclaw/plugin-runtime-deps
+      OPENCLAW_PLUGIN_STAGE_DIR: /home/node/.openclaw/plugin-runtime-deps
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
