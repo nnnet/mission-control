@@ -2,7 +2,8 @@
 #
 # This compose file is intentionally INDEPENDENT of `docker-compose.yml` and
 # `docker-compose-dev.yml`. It does not modify the MC stack; it stands up the
-# OpenClaw gateway daemon on the host's :18789 / :18790 ports. MC already
+# OpenClaw gateway daemon on the host's :18789 / :18790 ports, with a dedicated
+# control-ui reverse proxy on :18791. MC already
 # defaults to `OPENCLAW_GATEWAY_HOST=host.docker.internal` and
 # `OPENCLAW_GATEWAY_PORT=18789`, so when this stack is up MC discovers the
 # gateway with no config change. When this stack is down, MC silently falls
@@ -198,6 +199,7 @@ services:
       - "${OPENCLAW_CONTROL_UI_PORT:-18791}:80"
     volumes:
       - ./openclaw-src/dist/control-ui:/usr/share/nginx/html:ro
+      - ./docker/openclaw-control-ui.nginx.conf:/etc/nginx/conf.d/default.conf:ro
     healthcheck:
       test:
         - "CMD-SHELL"

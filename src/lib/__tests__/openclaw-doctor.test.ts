@@ -146,4 +146,16 @@ Run "openclaw doctor --fix" to apply changes.
       'Channel "public" has no auth configured.',
     ])
   })
+
+  it('treats telegram dm pairing lock line as informational', () => {
+    const result = parseOpenClawDoctorOutput(`
+? Security
+- Telegram DMs: locked (channels.telegram.dmPolicy='pairing')
+- No channel security warnings detected.
+`, 0)
+
+    expect(result.healthy).toBe(true)
+    expect(result.level).toBe('healthy')
+    expect(result.issues).toEqual([])
+  })
 })

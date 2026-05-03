@@ -15,6 +15,7 @@ services:
       - OPENCLAW_GATEWAY_URL=${OPENCLAW_GATEWAY_URL:-ws://host.docker.internal:18789}
       - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-}
       - OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-1}
+      - MC_ALLOWED_HOSTS=${MC_ALLOWED_HOSTS:-localhost,127.0.0.1,::1}
       - OPENCLAW_STATE_DIR=/home/nextjs/.openclaw
       - OPENCLAW_CONFIG_PATH=/home/nextjs/.openclaw/openclaw.json
       # Host CLIs (~/.local/bin) come first; container-baked fallbacks second.

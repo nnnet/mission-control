@@ -92,6 +92,8 @@
 - **Prod CLI availability root cause**: production compose had no mounted OpenClaw runtime path (`openclaw-src`) and no mounted shim on PATH, so `openclaw` was unavailable in `mission-control` container.
 - **gateway.mode blocked start root cause**: MC-side state file `.mc-openclaw/openclaw.json` lacked `gateway.mode`, which can trip stricter OpenClaw gateway/CLI checks and trigger “gateway.mode is unset” warnings.
 - **Control UI separation gap**: existing compose only exposed gateway daemon endpoints, so there was no dedicated HTTP service/port for control UI assets.
+- **Control UI 1006 root cause**: dedicated `openclaw-control-ui` nginx service on `:18791` served static files only, so same-origin gateway API + WebSocket upgrade traffic from the Control UI did not terminate on the gateway process.
+- **Local security warning noise**: docker compose defaults did not set `MC_ALLOWED_HOSTS`, causing avoidable host-allowlist warnings on first local run.
 
 ## Fix
 <!-- beads-phase-id: TBD -->
@@ -100,6 +102,29 @@
 *Tasks managed via `bd` CLI*
 
 ### Applied changes
+- `docker-compose-openclaw.yml`
+  - Kept dedicated `openclaw-control-ui` service on `:18791`, but switched it from static-only serving to reverse-proxy topology for gateway APIs/WebSockets.
+  - Added nginx config mount so Control UI static assets are served while `/__openclaw/*`, `/api/*`, `/ws`, and `/gateway-ws` are proxied to `openclaw-gateway:18789`.
+- `docker/openclaw-control-ui.nginx.conf`
+  - New reverse-proxy config enabling same-origin gateway API + WS upgrades to prevent UI disconnect `1006` on port `18791`.
+- `docker-compose.yml`
+  - Added local-safe default `MC_ALLOWED_HOSTS=${MC_ALLOWED_HOSTS:-localhost,127.0.0.1,::1}` to reduce avoidable security scan warnings without broad host exposure.
+- `docker-compose-dev.yml`
+  - Added local-safe default `MC_ALLOWED_HOSTS=${MC_ALLOWED_HOSTS:-localhost,127.0.0.1,::1}` for dev stack parity.
+- `.env.example`
+  - Clarified HTTPS-only security toggles: keep `MC_COOKIE_SECURE` unset on plain HTTP, enable `MC_COOKIE_SECURE=1` and `MC_ENABLE_HSTS=1` only behind HTTPS.
+- `docs/openclaw-telegram-onboarding.md`
+  - Added concise operator runbook for "token present but dmPolicy=pairing" with user-id discovery, pairing list/approve flow, allowlist keys, and restart step.
+- `openclaw_hardening_guide.md`
+  - Added direct pointer to Telegram onboarding runbook.
+- `src/lib/openclaw-doctor.ts`
+  - Kept Telegram pairing lock output non-blocking with a more permissive matcher (`"pairing"` or `'pairing'`).
+- `src/lib/__tests__/openclaw-doctor.test.ts`
+  - Added regression test that pairing-lock line is treated as informational.
+- `Makefile`
+  - `openclaw-up` starts `openclaw-gateway` + `openclaw-control-ui` reverse proxy.
+  - Status text updated to reflect the dedicated Control UI service.
+
 - `docker-compose.yml`
   - Added OpenClaw gateway runtime env vars for production container (`OPENCLAW_GATEWAY_URL`, token, insecure-private-ws flag, explicit `OPENCLAW_STATE_DIR`).
   - Added production mounts:
@@ -139,6 +164,10 @@
 *Tasks managed via `bd` CLI*
 
 ### Command runs
+0. `bd ready --json`
+   - Failed: `database "mission_control" not found on Dolt server at 127.0.0.1:13870`.
+   - Continued implementation without bd issue updates (server-side beads DB unavailable).
+
 1. `make openclaw-build`
    - Completed successfully.
    - Key output includes:
@@ -164,10 +193,25 @@
 
 6. Additional checks
    - `curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:18791/` -> `200` (dedicated control UI port live).
-   - `docker logs mc-openclaw-gateway --since 10m | rg "OAuth dir not present|Control UI assets are missing|gateway.mode is unset"`
-     - No matches (targeted warning signatures absent in current startup window).
-   - `pnpm vitest run src/lib/__tests__/openclaw-doctor.test.ts`
-     - Passed (`9/9`) confirming expected parser handling of informational security output.
+    - `docker logs mc-openclaw-gateway --since 10m | rg "OAuth dir not present|Control UI assets are missing|gateway.mode is unset"`
+      - No matches (targeted warning signatures absent in current startup window).
+    - `pnpm vitest run src/lib/__tests__/openclaw-doctor.test.ts`
+      - Passed (`9/9`) confirming expected parser handling of informational security output.
+
+7. Topology verification (reverse-proxied UI on :18791)
+   - `make openclaw-up`
+     - Started `mc-openclaw-gateway` and `mc-openclaw-control-ui`.
+   - `make openclaw-status`
+     - `Gateway HTTP: 200`
+     - `Control UI: 200`
+     - `MC->Gateway: OK` (after `make up`)
+   - `curl -I http://127.0.0.1:18791/`
+     - `HTTP/1.1 200 OK` from nginx control-ui service.
+   - `curl -I http://127.0.0.1:18791/healthz`
+     - `HTTP/1.1 200 OK` proving 18791 route reaches gateway health endpoint.
+   - WebSocket sanity probe:
+     - `curl -i -H "Connection: Upgrade" -H "Upgrade: websocket" ... http://127.0.0.1:18791/ws`
+     - Response body from gateway stack: `Missing or invalid Sec-WebSocket-Key header` (request reached WS endpoint through proxy).
 
 ## Finalize
 <!-- beads-phase-id: TBD -->
