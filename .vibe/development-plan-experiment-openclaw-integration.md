@@ -23,7 +23,7 @@
 - Added separate OpenClaw Control UI container (`mc-openclaw-control-ui`) serving `openclaw-src/dist/control-ui` on dedicated host port `OPENCLAW_CONTROL_UI_PORT` (default `18791`).
 - Added local-only Control UI device auto-approval sidecar (`mc-openclaw-control-ui-autopair`) that watches pending pair requests and auto-approves only local Docker Control UI requests (`clientId=openclaw-control-ui`, private/loopback IP, `gateway.mode=local`).
 - Standardized Make lifecycle UX to universal verbs (`up/down/restart/status/update/rebuild/upgrade`) with optional scope selectors (`all|mc|openclaw`) instead of mode-specific target names.
-- Added explicit scope-aware update workflows for fast-moving MC/OpenClaw versions (`update`, `rebuild`, `upgrade`, `openclaw-update`) and flag-based mode overrides (`--dev`, `--prod`).
+- Added explicit scope-aware update workflows for fast-moving MC/OpenClaw versions (`update`, `rebuild`, `upgrade`, `openclaw-update`) and positional mode overrides (`dev`, `prod`).
 
 ## Notes
 *Additional context and observations*
@@ -232,8 +232,11 @@
   - Removed runtime-state restart branching helpers from primary path (`openclaw-restart-or-up`, `openclaw-restart-if-running`) to eliminate ambiguity.
   - Hardened `wait-ready` probe with curl connect/request timeouts to avoid long network stalls being perceived as hangs.
 - `docs/ops-cheatsheet.md` / `docs/deployment.md`
-  - Updated docs to include universal command grammar, scope examples (`make status openclaw`), and mode-flag examples (`make up --dev`, `make restart mc --prod`) with executable GNU Make form (`make -- ...`).
+  - Updated docs to include universal command grammar, scope examples (`make status openclaw`), and positional mode examples (`make restart dev`, `make restart mc dev`).
   - Updated restart semantics note to deterministic down→up behavior for all scopes, with OpenClaw inclusion driven only by scope + `OPENCLAW_ENABLED`.
+- `Makefile` / `docs/ops-cheatsheet.md` / `docs/deployment.md`
+  - Normalized command grammar to one deterministic form: `make <verb> [scope] [mode]` where `scope=all|mc|openclaw` and `mode=dev|prod`.
+  - Removed `--dev`/`--prod` references from operator guidance and help output; added note that GNU Make consumes unknown `--xxx` options before goal parsing.
 
 ## Verify
 <!-- beads-phase-id: TBD -->
@@ -431,6 +434,18 @@
       - Completed successfully; same deterministic down→up behavior with CLI mode override (`--dev`) taking precedence.
     - `make status`
       - Completed successfully after restart checks (`Mode: dev`, `MC URL: 200`, `Gateway HTTP: 200`, `Control UI: 200`, `MC->Gateway: OK`).
+
+17. Positional mode-token grammar verification (2026-05-04)
+    - `make help`
+      - Completed successfully; help now documents only `make <verb> [scope] [mode]`.
+    - `make restart dev`
+      - Completed successfully (deterministic down→up in `dev` mode).
+    - `make restart mc dev`
+      - Completed successfully (MC-only deterministic down→up in `dev` mode).
+    - `make status openclaw`
+      - Completed successfully (OpenClaw-only status path).
+    - `make upgrade prod`
+      - Dry-safe validation accepted in this session (`make -n upgrade prod`) to confirm grammar/flow wiring without forcing a full rebuild/restart side effect.
 
 ## Finalize
 <!-- beads-phase-id: TBD -->

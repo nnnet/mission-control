@@ -24,26 +24,22 @@ make upgrade
 ## 3) Command grammar
 
 ```text
-make <verb> [all|mc|openclaw]
-make -- <verb> [all|mc|openclaw] [--dev|--prod]
+make <verb> [all|mc|openclaw] [dev|prod]
 ```
 
 - `all` is the default scope.
-- `--dev` / `--prod` overrides `MC_MODE` for a single invocation.
-- GNU Make parses `--dev`/`--prod` as options unless you separate with `make -- ...`.
+- `dev` / `prod` overrides `MC_MODE` for a single invocation.
+- Why no `--dev` / `--prod`: GNU Make consumes unknown `--xxx` as Make options before Makefile goal parsing, so mode uses positional tokens for deterministic behavior.
 - `make restart [scope]` is deterministic and always executes `make down [scope]` followed by `make up [scope]`.
 - For default scope `all`, OpenClaw participation is controlled only by `OPENCLAW_ENABLED` (`1` includes OpenClaw in both down/up, `0` skips it in both).
 
-Examples (requested grammar + executable form):
+Examples:
 
 ```bash
-make up --dev                 # grammar
-make -- up --dev              # executable form
-
-make restart mc --prod        # grammar
-make -- restart mc --prod     # executable form
-
+make restart dev
+make restart mc dev
 make status openclaw
+make status prod
 ```
 
 ## 4) Command matrix (scope + mode-aware)
@@ -61,8 +57,8 @@ make status openclaw
 Mode override examples:
 
 ```bash
-make -- up --dev
-make -- restart mc --prod
+make up dev
+make restart mc prod
 ```
 
 ## 5) `update` vs `upgrade`

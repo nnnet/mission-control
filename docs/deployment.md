@@ -104,13 +104,12 @@ Use `.env` + `.env.openclaw` as the single source of truth for mode/host/port/to
 Command grammar:
 
 ```text
-make <verb> [all|mc|openclaw]
-make -- <verb> [all|mc|openclaw] [--dev|--prod]
+make <verb> [all|mc|openclaw] [dev|prod]
 ```
 
 - `all` is default scope.
-- `--dev` / `--prod` override `MC_MODE` for one command invocation.
-- GNU Make requires `make -- ...` when passing `--dev`/`--prod` as goals.
+- `dev` / `prod` override `MC_MODE` for one command invocation.
+- Why no `--dev` / `--prod`: GNU Make consumes unknown `--xxx` tokens as Make options before Makefile goals are parsed, so mode overrides use positional tokens for deterministic behavior.
 - `make restart [scope]` is deterministic and always executes `make down [scope]` followed by `make up [scope]`.
 - With default `all` scope, `OPENCLAW_ENABLED=1` includes OpenClaw in both the down and up phases; `OPENCLAW_ENABLED=0` skips OpenClaw in both phases.
 
@@ -129,11 +128,10 @@ Primary operator commands:
 Mode override examples:
 
 ```bash
-make up --dev
-make -- up --dev
-make restart mc --prod
-make -- restart mc --prod
+make restart dev
+make restart mc dev
 make status openclaw
+make upgrade prod
 ```
 
 ### `update` vs `upgrade`

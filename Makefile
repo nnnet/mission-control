@@ -30,14 +30,14 @@ OPENCLAW_STATUS_HOST ?= 127.0.0.1
 OPENCLAW_GATEWAY_PORT ?= 18789
 OPENCLAW_CONTROL_UI_PORT ?= 18791
 
-MODE_FLAG_WORDS := $(filter --dev --prod,$(MAKECMDGOALS))
-ifneq ($(words $(MODE_FLAG_WORDS)),0)
-ifneq ($(words $(MODE_FLAG_WORDS)),1)
-$(error Conflicting mode flags $(MODE_FLAG_WORDS). Use only one of --dev or --prod)
+MODE_WORDS := $(filter dev prod,$(MAKECMDGOALS))
+ifneq ($(words $(MODE_WORDS)),0)
+ifneq ($(words $(MODE_WORDS)),1)
+$(error Conflicting mode selectors $(MODE_WORDS). Use only one of dev or prod)
 endif
 endif
 
-CLI_MODE_OVERRIDE := $(patsubst --%,%,$(firstword $(MODE_FLAG_WORDS)))
+CLI_MODE_OVERRIDE := $(firstword $(MODE_WORDS))
 EFFECTIVE_MC_MODE := $(if $(CLI_MODE_OVERRIDE),$(CLI_MODE_OVERRIDE),$(MC_MODE))
 
 # Propagate effective mode into recursive $(MAKE) invocations.
@@ -45,7 +45,7 @@ MC_MODE := $(EFFECTIVE_MC_MODE)
 
 VALID_EFFECTIVE_MC_MODE := $(filter $(EFFECTIVE_MC_MODE),prod dev)
 ifeq ($(VALID_EFFECTIVE_MC_MODE),)
-$(error Invalid MC mode '$(EFFECTIVE_MC_MODE)'. Expected 'prod' or 'dev' (from --dev/--prod or MC_MODE))
+$(error Invalid MC mode '$(EFFECTIVE_MC_MODE)'. Expected 'prod' or 'dev' (from positional mode token or MC_MODE))
 endif
 
 SCOPE_WORDS := $(filter all mc openclaw,$(MAKECMDGOALS))
@@ -75,9 +75,9 @@ endif
 .DEFAULT_GOAL := help
 MAKE_SUB := $(MAKE) --no-print-directory MC_MODE=$(EFFECTIVE_MC_MODE)
 
-# Selector/mode tokens for `make <verb> [scope] [--mode]`
-.PHONY: all mc openclaw --dev --prod
-all mc openclaw --dev --prod:
+# Selector/mode tokens for `make <verb> [scope] [mode]`
+.PHONY: all mc openclaw dev prod
+all mc openclaw dev prod:
 	@:
 
 # ── Help ───────────────────────────────────────────────────────────────────
@@ -85,15 +85,14 @@ all mc openclaw --dev --prod:
 help:  ## Show minimal day-to-day commands
 	@printf "\nMission Control Make workflow\n\n"
 	@printf "  Effective mode:     %s\n" "$(EFFECTIVE_MC_MODE)"
-	@printf "  Mode source:        %s\n" "$(if $(CLI_MODE_OVERRIDE),flag $(firstword $(MODE_FLAG_WORDS)),MC_MODE=$(MC_MODE_DEFAULT))"
+	@printf "  Mode source:        %s\n" "$(if $(CLI_MODE_OVERRIDE),token $(firstword $(MODE_WORDS)),MC_MODE=$(MC_MODE_DEFAULT))"
 	@printf "  Target scope:       %s\n" "$(TARGET_SCOPE)"
 	@printf "  OpenClaw enabled:   %s (1=yes, 0=no)\n\n" "$(OPENCLAW_ENABLED)"
 	@printf "Set defaults in .env/.env.openclaw:\n"
 	@printf "  MC_MODE=prod|dev\n"
 	@printf "  OPENCLAW_ENABLED=1|0\n\n"
 	@printf "Grammar:\n"
-	@printf "  %-20s %s\n" "make <verb> [scope]" "scope: all (default) | mc | openclaw"
-	@printf "  %-20s %s\n\n" "make -- <verb> [scope] [--dev|--prod]" "mode flags override MC_MODE for this run"
+	@printf "  %-20s %s\n\n" "make <verb> [scope] [mode]" "scope: all (default) | mc | openclaw; mode: dev|prod"
 	@printf "Recommended commands:\n"
 	@printf "  %-20s %s\n" "make up" "Start stack for scope (all respects OPENCLAW_ENABLED)"
 	@printf "  %-20s %s\n" "make restart" "Deterministic stop+start for scope"
@@ -104,8 +103,9 @@ help:  ## Show minimal day-to-day commands
 	@printf "  %-20s %s\n" "make upgrade" "update + rebuild + restart for scope"
 	@printf "\nExamples:\n"
 	@printf "  %-20s %s\n" "make status openclaw" "OpenClaw-only status"
-	@printf "  %-20s %s\n" "make -- up --dev" "Start all in dev mode for this invocation"
-	@printf "  %-20s %s\n" "make -- restart mc --prod" "Restart MC only in prod mode"
+	@printf "  %-20s %s\n" "make restart dev" "Restart all in dev mode for this invocation"
+	@printf "  %-20s %s\n" "make restart mc dev" "Restart MC only in dev mode"
+	@printf "  %-20s %s\n" "make status prod" "Check all scope in prod mode"
 	@printf "\nAdvanced:\n"
 	@printf "  %-20s %s\n" "make help-all" "List all available targets"
 
