@@ -7,7 +7,7 @@ FROM base AS deps
 COPY package.json ./
 COPY pnpm-lock.yaml* ./
 # better-sqlite3 requires native compilation tools
-RUN apt-get update && apt-get install -y python3 make g++ --no-install-recommends && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get upgrade && apt-get install -y python3 make g++ --no-install-recommends && rm -rf /var/lib/apt/lists/*
 RUN if [ -f pnpm-lock.yaml ]; then \
       pnpm install --frozen-lockfile; \
     else \
@@ -32,7 +32,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 # curl, CA certs, python3, git needed for agent runtime installers (OpenClaw, Hermes)
 # procps provides `ps` and `uptime` used by system-monitor APIs
-RUN apt-get update && apt-get install -y curl ca-certificates python3 git make g++ procps tmux jq --no-install-recommends && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get upgrade && apt-get install -y curl ca-certificates python3 git make g++ procps tmux jq --no-install-recommends && rm -rf /var/lib/apt/lists/*
 
 # Bake Claude Code + Codex CLIs into the image as a fallback so the
 # Settings → Agent Runtimes panel reports "Installed" even before the host

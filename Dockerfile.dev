@@ -8,7 +8,7 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 WORKDIR /app
 
 # OS deps: better-sqlite3 build tools, agent-runtime probes, /chat PTY.
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get upgrade && apt-get install -y \
       curl ca-certificates python3 git make g++ procps tmux jq \
       --no-install-recommends && rm -rf /var/lib/apt/lists/*
 
