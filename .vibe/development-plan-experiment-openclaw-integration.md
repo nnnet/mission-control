@@ -447,6 +447,34 @@
     - `make upgrade prod`
       - Dry-safe validation accepted in this session (`make -n upgrade prod`) to confirm grammar/flow wiring without forcing a full rebuild/restart side effect.
 
+18. OpenClaw doctor ownership/Telegram investigation + fix (2026-05-04)
+    - Verified gateway env + compose projection inputs:
+      - `docker exec mc-openclaw-gateway env | grep TELEGRAM`
+        - `TELEGRAM_BOT_TOKEN` and `TELEGRAM_NUMERIC_USER_ID` are present in the running gateway container.
+      - `docker compose -f docker-compose-openclaw.yml config`
+        - OpenClaw stack consumes both `env_file` entries (`.env`, then `.env.openclaw`) and explicit `environment` mappings for Telegram vars.
+    - Verified `.openclaw-data/openclaw.json` (gateway state) already had correct projected values:
+      - `commands.ownerAllowFrom` includes `telegram:${TELEGRAM_NUMERIC_USER_ID}`.
+      - `channels.telegram.allowFrom` includes `${TELEGRAM_NUMERIC_USER_ID}`.
+      - `channels.telegram.dmPolicy` is `allowlist`.
+    - Root cause isolated:
+      - The warning was coming from Mission Control's own OpenClaw CLI state at `.mc-openclaw/openclaw.json` (inside `mission-control-dev`), not from gateway state at `.openclaw-data/openclaw.json`.
+      - `scripts/openclaw-cli-shim.py` only enforced `gateway.mode=local` and did not project Telegram owner/dmPolicy/allowlist keys from env, so `openclaw doctor` inside MC kept reporting:
+        - `No command owner configured`
+        - `dmPolicy="pairing" with no allowlist`
+    - Fix applied:
+      - Updated `scripts/openclaw-cli-shim.py` bootstrap (`ensure_openclaw_state_defaults`) to idempotently project env-driven Telegram ownership/channel policy into MC state when vars are set:
+        - `commands.ownerAllowFrom += ["telegram:<TELEGRAM_NUMERIC_USER_ID>"]`
+        - `channels.telegram.allowFrom += ["<TELEGRAM_NUMERIC_USER_ID>"]`
+        - `channels.telegram.dmPolicy = "allowlist"`
+        - `channels.telegram.botToken = { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" }`
+    - Post-fix verification:
+      - `docker exec mission-control-dev openclaw doctor`
+        - Command owner / Telegram allowlist warnings no longer present.
+      - `docker compose -f docker-compose-openclaw.yml restart`
+      - `make openclaw-status`
+        - Gateway/control endpoints healthy and MC→Gateway linkage OK.
+
 ## Finalize
 <!-- beads-phase-id: TBD -->
 ### Tasks

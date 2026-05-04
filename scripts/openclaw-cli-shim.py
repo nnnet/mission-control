@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -78,6 +79,60 @@ def ensure_openclaw_state_defaults() -> None:
 
     if gateway.get("mode") != "local":
         gateway["mode"] = "local"
+
+    commands = config.get("commands")
+    if not isinstance(commands, dict):
+        commands = {}
+
+    telegram_bot_token = str(os.environ.get("TELEGRAM_BOT_TOKEN", "")).strip()
+    telegram_owner_id = str(os.environ.get("TELEGRAM_NUMERIC_USER_ID", "")).strip()
+    has_numeric_telegram_owner = bool(re.fullmatch(r"[1-9][0-9]*", telegram_owner_id))
+
+    if telegram_bot_token or has_numeric_telegram_owner:
+        channels = config.get("channels")
+        if not isinstance(channels, dict):
+            channels = {}
+
+        telegram = channels.get("telegram")
+        if not isinstance(telegram, dict):
+            telegram = {}
+
+        telegram["enabled"] = True
+
+        if telegram_bot_token:
+            telegram["botToken"] = {
+                "source": "env",
+                "provider": "default",
+                "id": "TELEGRAM_BOT_TOKEN",
+            }
+
+        if has_numeric_telegram_owner:
+            owner_allow_from = [
+                str(entry).strip()
+                for entry in commands.get("ownerAllowFrom", [])
+                if str(entry).strip()
+            ] if isinstance(commands.get("ownerAllowFrom"), list) else []
+
+            owner_entry = f"telegram:{telegram_owner_id}"
+            if owner_entry not in owner_allow_from:
+                owner_allow_from.append(owner_entry)
+            commands["ownerAllowFrom"] = owner_allow_from
+
+            allow_from = [
+                str(entry).strip()
+                for entry in telegram.get("allowFrom", [])
+                if str(entry).strip()
+            ] if isinstance(telegram.get("allowFrom"), list) else []
+
+            if telegram_owner_id not in allow_from:
+                allow_from.append(telegram_owner_id)
+            telegram["allowFrom"] = allow_from
+            telegram["dmPolicy"] = "allowlist"
+
+        channels["telegram"] = telegram
+        config["channels"] = channels
+
+    config["commands"] = commands
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n")
