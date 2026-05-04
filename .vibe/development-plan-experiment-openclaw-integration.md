@@ -492,8 +492,14 @@
     - Verification notes captured in session runbook:
       - Restarted MC + OpenClaw services with updated env/compose bootstrap.
       - Confirmed projected config values via `jq` in both `.openclaw-data/openclaw.json` and `.mc-openclaw/openclaw.json`.
-      - Confirmed doctor output suppression in MC API payload when `MC_OPENCLAW_DOCTOR_HIDE_INFO=1`.
-      - Confirmed gateway and MC health/status remained green.
+     - Confirmed doctor output suppression in MC API payload when `MC_OPENCLAW_DOCTOR_HIDE_INFO=1`.
+     - Confirmed gateway and MC health/status remained green.
+
+20. Urgent revert: remove MC doctor info suppression toggle (2026-05-04)
+    - Reverted `MC_OPENCLAW_DOCTOR_HIDE_INFO` usage end-to-end per updated requirement: Mission Control must not suppress OpenClaw doctor informational output.
+    - Removed env-var reads and parser option plumbing that previously stripped informational security lines from doctor `raw` output.
+    - Removed `MC_OPENCLAW_DOCTOR_HIDE_INFO` from compose env projections and env/docs examples.
+    - Updated parser tests to assert informational security lines remain visible in `raw` output while preserving healthy classification behavior.
 
 ## Finalize
 <!-- beads-phase-id: TBD -->

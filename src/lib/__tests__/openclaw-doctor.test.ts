@@ -130,6 +130,8 @@ Run "openclaw doctor --fix" to apply changes.
     expect(result.healthy).toBe(true)
     expect(result.level).toBe('healthy')
     expect(result.issues).toEqual([])
+    expect(result.raw).toContain('No channel security warnings detected.')
+    expect(result.raw).toContain('Run: openclaw security audit --deep')
   })
 
   it('still detects real security warnings alongside positive lines', () => {
@@ -145,18 +147,6 @@ Run "openclaw doctor --fix" to apply changes.
     expect(result.issues).toEqual([
       'Channel "public" has no auth configured.',
     ])
-  })
-
-  it('hides informational security lines from raw output when env toggle path is enabled', () => {
-    const result = parseOpenClawDoctorOutput(`
-? Security
-- No channel security warnings detected.
-- Run: openclaw security audit --deep
-`, 0, { hideInformationalSecurityLines: true })
-
-    expect(result.level).toBe('healthy')
-    expect(result.raw).not.toContain('No channel security warnings detected')
-    expect(result.raw).not.toContain('openclaw security audit --deep')
   })
 
   it('treats telegram dm pairing lock line as informational', () => {

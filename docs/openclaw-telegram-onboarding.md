@@ -77,20 +77,7 @@ Set explicit owner/channel allowlists (replace with your ID):
 - `commands.ownerAllowFrom` is recommended for owner-level commands.
 - `channels.telegram.allowFrom` is optional but recommended for tighter channel ACLs.
 
-## 4) Optional: hide non-actionable doctor security info in MC UI
-
-If you want Mission Control to suppress informational doctor lines like:
-
-- `No channel security warnings detected.`
-- `Run: openclaw security audit --deep`
-
-set:
-
-```env
-MC_OPENCLAW_DOCTOR_HIDE_INFO=1
-```
-
-## 5) Restart gateway + MC
+## 4) Restart gateway + MC
 
 ```bash
 make openclaw-restart
