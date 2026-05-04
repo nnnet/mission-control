@@ -85,6 +85,8 @@ make openclaw-down && make openclaw-up
 
 ### Make command matrix (prod vs dev vs updates)
 
+For day-to-day operations, see the [Daily Ops Cheatsheet](./ops-cheatsheet.md).
+
 Use `.env` + `.env.openclaw` as the single source of truth for host/port/token values.
 
 | Workflow | Production stack (`docker-compose.yml`) | Dev stack (`docker-compose-dev.yml`) |
@@ -317,7 +319,7 @@ When running Mission Control alongside a gateway as containers in the same pod (
 │  │ :3000   │     │   :18789      │  │
 │  └─────────┘     └───────────────┘  │
 │       ▲                  ▲          │
-│       │ localhost         │          │
+│       │ localhost        │          │
 │       └──────────────────┘          │
 └─────────────────────────────────────┘
 ```
