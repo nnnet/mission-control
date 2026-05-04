@@ -79,40 +79,45 @@ What `deploy:standalone` does:
 Preferred operator flow (Make controls docker compose):
 
 ```bash
-make down && make up
-make openclaw-down && make openclaw-up
+# 1) choose mode in .env
+#    MC_MODE=prod   # or dev
+#    OPENCLAW_ENABLED=1   # set 0 to run MC without OpenClaw stack
+
+# 2) run the same commands in both modes
+make up
+make restart
+make down
+make status
 ```
 
-### Make command matrix (prod vs dev vs updates)
+### Mode-aware Make workflow (minimal commands)
 
 For day-to-day operations, see the [Daily Ops Cheatsheet](./ops-cheatsheet.md).
 
-Use `.env` + `.env.openclaw` as the single source of truth for host/port/token values.
+Use `.env` + `.env.openclaw` as the single source of truth for mode/host/port/token values.
 
-| Workflow | Production stack (`docker-compose.yml`) | Dev stack (`docker-compose-dev.yml`) |
-|---|---|---|
-| Start | `make up` | `make dev-up` (or `make dev`) |
-| Restart | `make restart` | `make dev-restart` |
-| Stop | `make down` | `make dev-down` |
-| Status | `make status` | `make dev-ps` |
-| Update MC quickly | `make upgrade` | `make upgrade-dev` |
+- `MC_MODE=prod` → `docker-compose.yml`
+- `MC_MODE=dev` → `docker-compose-dev.yml`
+- `OPENCLAW_ENABLED=1` → `make up/restart/down` also manages OpenClaw
+- `OPENCLAW_ENABLED=0` → MC stack only
 
-OpenClaw lifecycle (shared across prod/dev MC modes):
+Primary operator commands:
 
 | Workflow | Command |
 |---|---|
-| Start OpenClaw stack | `make openclaw-up` |
-| Stop OpenClaw stack | `make openclaw-down` |
-| Restart gateway | `make openclaw-restart` |
-| Status | `make openclaw-status` |
-| Update OpenClaw source/build | `make openclaw-update` (alias: `make upgrade-openclaw`) |
+| Start selected mode (+ OpenClaw when enabled) | `make up` |
+| Restart selected mode (+ OpenClaw when enabled) | `make restart` |
+| Stop selected mode (+ OpenClaw when enabled) | `make down` |
+| Mode + endpoint health summary | `make status` |
 
-`make restart` and `make dev-restart` are mode-aware and will restart OpenClaw gateway automatically when it is already running, while preserving previous behavior when OpenClaw is down.
+Compatibility aliases still exist (`make dev-up`, `make dev-restart`, `make dev-down`, `make dev-ps`) but are no longer required for day-to-day operation.
 
 Minimum `.env` / `.env.openclaw` keys for this flow:
 
 ```env
 # .env
+MC_MODE=prod
+OPENCLAW_ENABLED=1
 MC_URL_SCHEME=http
 MC_HOST=127.0.0.1
 MC_PORT=7012

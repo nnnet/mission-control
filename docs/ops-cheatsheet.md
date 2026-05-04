@@ -2,7 +2,14 @@
 
 Use this as a fast copy-paste reference for daily container operations.
 
-## 1) Prod lifecycle
+## 1) Choose mode once (.env)
+
+```env
+MC_MODE=prod            # or dev
+OPENCLAW_ENABLED=1      # set 0 for MC-only lifecycle
+```
+
+## 2) Primary lifecycle (mode-aware)
 
 ```bash
 make up
@@ -11,7 +18,7 @@ make down
 make status
 ```
 
-## 2) Dev lifecycle
+## 3) Compatibility aliases (optional)
 
 ```bash
 make dev-up
@@ -20,7 +27,7 @@ make dev-down
 make dev-ps
 ```
 
-## 3) OpenClaw lifecycle
+## 4) OpenClaw lifecycle (direct commands)
 
 ```bash
 make openclaw-up
@@ -29,7 +36,7 @@ make openclaw-down
 make openclaw-status
 ```
 
-## 4) Upgrade flows
+## 5) Upgrade flows
 
 ```bash
 make upgrade

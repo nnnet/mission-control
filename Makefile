@@ -1,5 +1,5 @@
 # Mission Control — local stack control plane.
-# Use `make help` for the full target list.
+# Use `make help` for minimal workflow, `make help-all` for full target list.
 
 SHELL := /bin/bash
 .ONESHELL:
@@ -16,6 +16,8 @@ COMPOSE_OC  := docker compose -f docker-compose-openclaw.yml
 OPENCLAW_SRC := $(PROJECT_DIR)/openclaw-src
 OPENCLAW_REPO := https://github.com/openclaw/openclaw.git
 OPENCLAW_REF  := main
+MC_MODE ?= prod
+OPENCLAW_ENABLED ?= 1
 CONTAINER   := mission-control
 CONTAINER_DEV := mission-control-dev
 OPENCLAW_GATEWAY_CONTAINER := mc-openclaw-gateway
@@ -28,75 +30,158 @@ OPENCLAW_STATUS_HOST ?= 127.0.0.1
 OPENCLAW_GATEWAY_PORT ?= 18789
 OPENCLAW_CONTROL_UI_PORT ?= 18791
 
+VALID_MC_MODE := $(filter $(MC_MODE),prod dev)
+ifeq ($(VALID_MC_MODE),)
+$(error Invalid MC_MODE='$(MC_MODE)'. Expected 'prod' or 'dev')
+endif
+
+VALID_OPENCLAW_ENABLED := $(filter $(OPENCLAW_ENABLED),0 1)
+ifeq ($(VALID_OPENCLAW_ENABLED),)
+$(error Invalid OPENCLAW_ENABLED='$(OPENCLAW_ENABLED)'. Expected '0' or '1')
+endif
+
+ifeq ($(MC_MODE),dev)
+MC_COMPOSE := $(COMPOSE_DEV)
+MC_CONTAINER := $(CONTAINER_DEV)
+MC_STACK_LABEL := dev
+else
+MC_COMPOSE := $(COMPOSE)
+MC_CONTAINER := $(CONTAINER)
+MC_STACK_LABEL := prod
+endif
+
 .DEFAULT_GOAL := help
 
 # ── Help ───────────────────────────────────────────────────────────────────
 .PHONY: help
-help:  ## List targets
+help:  ## Show minimal day-to-day commands
+	@printf "\nMission Control Make workflow\n\n"
+	@printf "  Selected mode:      %s\n" "$(MC_MODE)"
+	@printf "  OpenClaw enabled:   %s (1=yes, 0=no)\n\n" "$(OPENCLAW_ENABLED)"
+	@printf "Set defaults in .env:\n"
+	@printf "  MC_MODE=prod|dev\n"
+	@printf "  OPENCLAW_ENABLED=1|0\n\n"
+	@printf "Primary commands:\n"
+	@printf "  %-20s %s\n" "make up" "Start selected MC stack (+ OpenClaw when enabled)"
+	@printf "  %-20s %s\n" "make restart" "Restart selected MC stack (+ OpenClaw when enabled)"
+	@printf "  %-20s %s\n" "make down" "Stop selected MC stack (+ OpenClaw when enabled)"
+	@printf "  %-20s %s\n" "make status" "Show mode-aware health and endpoint status"
+	@printf "\nAdvanced commands:\n"
+	@printf "  %-20s %s\n" "make help-all" "List all available targets"
+
+.PHONY: help-all
+help-all:  ## List all targets
 	@awk 'BEGIN{FS=":.*##"; printf "\nUsage: make \033[36m<target>\033[0m\n\nTargets:\n"} \
 	      /^[a-zA-Z0-9_-]+:.*##/ { printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2 }' \
 	      $(MAKEFILE_LIST)
 
-# ── Prod lifecycle (docker-compose.yml) ───────────────────────────────────
-.PHONY: up
-up:  ## [prod] Bring stack up and wait for /login
+# ── Unified lifecycle (mode selected via MC_MODE=prod|dev) ────────────────
+.PHONY: mc-up
+mc-up:
 	@cd $(PROJECT_DIR)
-	$(COMPOSE) up -d $(ARGS)
+	$(MC_COMPOSE) up -d $(ARGS)
 	@$(MAKE) --no-print-directory wait-ready
+
+.PHONY: up
+up:  ## Start selected mode (+ OpenClaw when enabled)
+	@$(MAKE) --no-print-directory mc-up ARGS="$(ARGS)"
+	@if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
+	  $(MAKE) --no-print-directory openclaw-up; \
+	else \
+	  echo "OpenClaw disabled (OPENCLAW_ENABLED=0)"; \
+	fi
 	@echo
-	@echo "Mission Control is up at $(URL)"
+	@echo "Mission Control ($(MC_STACK_LABEL)) is up at $(URL)"
+	@if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
+	  echo "OpenClaw endpoints:"; \
+	  echo "  gateway  — http://$(OPENCLAW_STATUS_HOST):$(OPENCLAW_GATEWAY_PORT)/healthz"; \
+	  echo "  control  — http://$(OPENCLAW_STATUS_HOST):$(OPENCLAW_CONTROL_UI_PORT)/"; \
+	fi
 	@echo "  /setup    — create admin (first run)"
 	@echo "  /login    — sign in"
 	@echo "  /tasks    — Kanban board"
 	@echo "  /agents   — agent registry"
 
-.PHONY: down
-down:  ## [prod] Stop stack (volumes preserved)
+.PHONY: mc-down
+mc-down:
 	@cd $(PROJECT_DIR)
-	$(COMPOSE) down
+	$(MC_COMPOSE) down
 
-.PHONY: restart
-restart:  ## [prod] Restart MC (+ OpenClaw gateway if currently running)
+.PHONY: down
+down:  ## Stop selected mode (+ OpenClaw when enabled)
+	@if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
+	  $(MAKE) --no-print-directory openclaw-down; \
+	fi
+	@$(MAKE) --no-print-directory mc-down
+
+.PHONY: mc-restart
+mc-restart:
 	@cd $(PROJECT_DIR)
-	$(COMPOSE) restart
-	@$(MAKE) --no-print-directory openclaw-restart-if-running
+	$(MC_COMPOSE) restart
 	@$(MAKE) --no-print-directory wait-ready
 
+.PHONY: openclaw-restart-or-up
+openclaw-restart-or-up:
+	@cd $(PROJECT_DIR)
+	@if docker ps --format '{{.Names}}' | grep -q '^$(OPENCLAW_GATEWAY_CONTAINER)$$'; then \
+	  $(MAKE) --no-print-directory openclaw-restart; \
+	else \
+	  $(MAKE) --no-print-directory openclaw-up; \
+	fi
+
+.PHONY: restart
+restart:  ## Restart selected mode (+ OpenClaw when enabled)
+	@$(MAKE) --no-print-directory mc-restart
+	@if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
+	  $(MAKE) --no-print-directory openclaw-restart-or-up; \
+	fi
+
 .PHONY: recreate
-recreate:  ## [prod] Force recreate container (apply compose changes)
+recreate:  ## Force recreate selected mode container
 	@$(MAKE) --no-print-directory up ARGS="--force-recreate"
 
 .PHONY: build
-build:  ## [prod] Build/refresh Mission Control image
+build:  ## Build/refresh selected mode Mission Control image
 	@cd $(PROJECT_DIR)
-	$(COMPOSE) build $(ARGS)
+	$(MC_COMPOSE) build $(ARGS)
 
 .PHONY: rebuild
-rebuild:  ## [prod] Rebuild image (no cache) and recreate
+rebuild:  ## Rebuild image (no cache) and recreate selected mode
 	@cd $(PROJECT_DIR)
-	$(COMPOSE) build --no-cache
+	$(MC_COMPOSE) build --no-cache
 	@$(MAKE) --no-print-directory recreate
 
 .PHONY: ps
-ps:  ## [prod] Show container status
+ps:  ## Show selected mode container status
 	@cd $(PROJECT_DIR)
-	$(COMPOSE) ps
+	$(MC_COMPOSE) ps
 
 .PHONY: logs
-logs:  ## [prod] Tail server logs (Ctrl+C to stop)
+logs:  ## Tail selected mode server logs (Ctrl+C to stop)
 	@cd $(PROJECT_DIR)
-	$(COMPOSE) logs -f --tail=200
+	$(MC_COMPOSE) logs -f --tail=200
 
 .PHONY: shell
-shell:  ## [prod] Open interactive shell in container
-	docker exec -it $(CONTAINER) bash || docker exec -it $(CONTAINER) sh
+shell:  ## Open interactive shell in selected mode container
+	docker exec -it $(MC_CONTAINER) bash || docker exec -it $(MC_CONTAINER) sh
 
 .PHONY: status
-status:  ## [prod] One-line health + CLI reachability
-	@printf "URL:     "; curl -sS -o /dev/null -L -w "%{http_code} → %{url_effective}\n" $(URL) || true
-	@printf "claude:  "; docker exec $(CONTAINER) sh -c 'which claude && claude --version' 2>&1 | tail -1
-	@printf "codex:   "; docker exec $(CONTAINER) sh -c 'which codex && codex --version 2>&1 | tail -1' 2>&1 | tail -1
-	@printf "gemini:  "; docker exec $(CONTAINER) sh -c 'which gemini' 2>&1 | tail -1
+status:  ## Show selected mode and endpoint health
+	@echo "Mode:              $(MC_MODE)"
+	@echo "MC container:      $(MC_CONTAINER)"
+	@echo "OpenClaw enabled:  $(OPENCLAW_ENABLED)"
+	@printf "MC URL:            "; curl -sS -o /dev/null -L -w "%{http_code} → %{url_effective}\n" $(URL) || true
+	@if docker ps --format '{{.Names}}' | grep -q '^$(MC_CONTAINER)$$'; then \
+	  printf "claude:            "; docker exec $(MC_CONTAINER) sh -c 'which claude && claude --version' 2>&1 | tail -1; \
+	  printf "codex:             "; docker exec $(MC_CONTAINER) sh -c 'which codex && codex --version 2>&1 | tail -1' 2>&1 | tail -1; \
+	  printf "gemini:            "; docker exec $(MC_CONTAINER) sh -c 'which gemini' 2>&1 | tail -1; \
+	else \
+	  echo "MC CLI checks:     container not running"; \
+	fi
+	@if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
+	  printf "OpenClaw gateway:  "; curl -fsS -o /dev/null -w "%{http_code}\n" "http://$(OPENCLAW_STATUS_HOST):$(OPENCLAW_GATEWAY_PORT)/healthz" 2>&1 || echo "DOWN"; \
+	  printf "OpenClaw control:  "; curl -fsS -o /dev/null -w "%{http_code}\n" "http://$(OPENCLAW_STATUS_HOST):$(OPENCLAW_CONTROL_UI_PORT)/" 2>&1 || echo "DOWN"; \
+	fi
 
 # ── Update workflows ───────────────────────────────────────────────────────
 .PHONY: repo-update
@@ -108,14 +193,13 @@ repo-update:  ## [shared] Fast-forward current git branch from origin
 	  git merge --ff-only "origin/$$branch"
 
 .PHONY: upgrade
-upgrade: repo-update  ## [prod] Pull latest source, build --pull, restart
+upgrade: repo-update  ## Pull latest source, build --pull, restart selected mode
 	@$(MAKE) --no-print-directory build ARGS="--pull"
 	@$(MAKE) --no-print-directory restart
 
 .PHONY: upgrade-dev
-upgrade-dev: repo-update  ## [dev] Pull latest source, build --pull, restart
-	@$(MAKE) --no-print-directory dev-build ARGS="--pull"
-	@$(MAKE) --no-print-directory dev-restart
+upgrade-dev:  ## [compat] Alias for mode-aware dev upgrade
+	@$(MAKE) --no-print-directory upgrade MC_MODE=dev
 
 .PHONY: upgrade-openclaw
 upgrade-openclaw: openclaw-update  ## [openclaw] Alias for openclaw-update
@@ -151,35 +235,23 @@ reset-db:  ## Wipe SQLite db (forces /setup again — admin password recovery)
 # ── Bookkeeping ────────────────────────────────────────────────────────────
 # ── Dev lifecycle (docker-compose-dev.yml) ─────────────────────────────────
 .PHONY: dev-up
-dev-up:  ## [dev] Bring stack up and wait for /login
-	@cd $(PROJECT_DIR)
-	$(COMPOSE_DEV) up -d $(ARGS)
-	@$(MAKE) --no-print-directory wait-ready
-	@echo
-	@echo "Mission Control (dev) is up at $(URL)"
-	@echo "  Code edits in src/ auto-reload via turbopack."
-	@echo "  Rebuild image only when package.json or Dockerfile.dev changes:"
-	@echo "    make dev-build"
+dev-up:  ## [compat] Alias for mode-aware dev up
+	@$(MAKE) --no-print-directory up MC_MODE=dev ARGS="$(ARGS)"
 
 .PHONY: dev
 dev: dev-up  ## [dev] Alias for dev-up
 
 .PHONY: dev-down
-dev-down:  ## [dev] Stop stack (volumes preserved)
-	@cd $(PROJECT_DIR)
-	$(COMPOSE_DEV) down
+dev-down:  ## [compat] Alias for mode-aware dev down
+	@$(MAKE) --no-print-directory down MC_MODE=dev
 
 .PHONY: dev-restart
-dev-restart:  ## [dev] Restart MC dev (+ OpenClaw gateway if currently running)
-	@cd $(PROJECT_DIR)
-	$(COMPOSE_DEV) restart
-	@$(MAKE) --no-print-directory openclaw-restart-if-running
-	@$(MAKE) --no-print-directory wait-ready
+dev-restart:  ## [compat] Alias for mode-aware dev restart
+	@$(MAKE) --no-print-directory restart MC_MODE=dev
 
 .PHONY: dev-build
 dev-build:  ## [dev] Rebuild image (when package.json / Dockerfile.dev changes)
-	@cd $(PROJECT_DIR)
-	$(COMPOSE_DEV) build $(ARGS)
+	@$(MAKE) --no-print-directory build MC_MODE=dev ARGS="$(ARGS)"
 
 .PHONY: dev-rebuild
 dev-rebuild:  ## [dev] Rebuild image (no cache) and recreate
@@ -190,17 +262,15 @@ dev-rebuild:  ## [dev] Rebuild image (no cache) and recreate
 
 .PHONY: dev-logs
 dev-logs:  ## [dev] Tail container logs (Ctrl+C to stop)
-	@cd $(PROJECT_DIR)
-	$(COMPOSE_DEV) logs -f --tail=200
+	@$(MAKE) --no-print-directory logs MC_MODE=dev
 
 .PHONY: dev-shell
 dev-shell:  ## [dev] Open shell inside container
-	docker exec -it $(CONTAINER_DEV) bash || docker exec -it $(CONTAINER_DEV) sh
+	@$(MAKE) --no-print-directory shell MC_MODE=dev
 
 .PHONY: dev-ps
 dev-ps:  ## [dev] Show container status
-	@cd $(PROJECT_DIR)
-	$(COMPOSE_DEV) ps
+	@$(MAKE) --no-print-directory ps MC_MODE=dev
 
 # ─────────────────────────────────────────────────────────────────────────────
 # OpenClaw integration — additive. Brings up the gateway daemon next to MC.
@@ -298,11 +368,11 @@ openclaw-status:  ## Quick health check (gateway + control UI + token/linkage)
 	else \
 	  echo "MC token:     NOT set in .env/.env.openclaw — copy from .openclaw-data/openclaw.json"; \
 	fi
-	@if docker ps --format '{{.Names}}' | grep -q '^$(CONTAINER)$$'; then \
+	@if docker ps --format '{{.Names}}' | grep -q '^$(MC_CONTAINER)$$'; then \
 	  printf "MC->Gateway: "; \
-	  docker exec $(CONTAINER) openclaw gateway call health --json --timeout 8000 >/dev/null 2>&1 && echo "OK" || echo "FAIL"; \
+	  docker exec $(MC_CONTAINER) openclaw gateway call health --json --timeout 8000 >/dev/null 2>&1 && echo "OK" || echo "FAIL"; \
 	else \
-	  echo "MC->Gateway: mission-control container not running"; \
+	  echo "MC->Gateway: selected MC container not running"; \
 	fi
 	@if [ -f .openclaw-data/devices/pending.json ]; then \
 	  printf "Pending pair: "; \
@@ -338,15 +408,15 @@ openclaw-pair-mc:  ## Auto-pair MC's openclaw CLI with the gateway (one-shot, id
 	@if ! docker ps --format '{{.Names}}' | grep -q '^mc-openclaw-gateway$$'; then \
 	  echo "ERROR: mc-openclaw-gateway not running — run 'make openclaw-up' first" >&2; exit 1; \
 	fi
-	@if ! docker ps --format '{{.Names}}' | grep -q '^mission-control-dev$$'; then \
-	  echo "ERROR: mission-control-dev not running — run 'make dev' first" >&2; exit 1; \
+	@if ! docker ps --format '{{.Names}}' | grep -q '^$(MC_CONTAINER)$$'; then \
+	  echo "ERROR: $(MC_CONTAINER) not running — run 'make up' first (mode: $(MC_MODE))" >&2; exit 1; \
 	fi
 	# 2. Trigger MC's openclaw CLI once so it generates ~/.openclaw/identity/device.json
 	#    and submits a pending pairing request to the gateway. The call itself is
 	#    expected to fail with "pairing required" — that is exactly what creates
 	#    the pending entry. Subsequent retries after the patch will succeed.
 	@echo "==> triggering pairing request from MC..."
-	@docker exec mission-control-dev openclaw gateway call health --json --timeout 5000 >/dev/null 2>&1 || true
+	@docker exec $(MC_CONTAINER) openclaw gateway call health --json --timeout 5000 >/dev/null 2>&1 || true
 	# Give the gateway a moment to flush the pending entry to disk.
 	@sleep 1
 	# 3. Patch pending → paired transactionally on host filesystem.
@@ -362,7 +432,7 @@ openclaw-pair-mc:  ## Auto-pair MC's openclaw CLI with the gateway (one-shot, id
 	#    UI doesn't disable the agent dropdown (it requires non-null
 	#    session_key on agents).
 	@echo "==> binding MC agents to openclaw agent ids..."
-	@docker exec mission-control-dev sh -c "cd /app && node -e \"\
+	@docker exec $(MC_CONTAINER) sh -c "cd /app && node -e \"\
 	const Database=require('better-sqlite3'); \
 	const db=new Database('.data/mission-control.db'); \
 	const map={'Architect (Claude Opus)':'architect','Aegis (Claude Sonnet, reviewer)':'aegis','Dev (OpenAI)':'dev','Linter (Local LLM)':'linter'}; \
@@ -386,7 +456,7 @@ openclaw-pair-mc:  ## Auto-pair MC's openclaw CLI with the gateway (one-shot, id
 	\""
 	# 5. Verify by re-issuing the call.
 	@echo "==> verifying pairing..."
-	@docker exec mission-control-dev openclaw gateway call health --json --timeout 8000 2>&1 | head -3
+	@docker exec $(MC_CONTAINER) openclaw gateway call health --json --timeout 8000 2>&1 | head -3
 
 .PHONY: openclaw-unpair-mc
 openclaw-unpair-mc:  ## Remove MC's paired entry (gateway side) and MC's local identity. Confirm with CONFIRM=yes.
@@ -418,5 +488,5 @@ nuke:  ## DANGER: down, drop volumes, drop image. Confirm via CONFIRM=yes
 	  echo "Refusing to nuke without CONFIRM=yes"; exit 1; \
 	fi
 	@cd $(PROJECT_DIR)
-	$(COMPOSE) down -v
+	$(MC_COMPOSE) down -v
 	docker image rm mission-control-mission-control 2>/dev/null || true

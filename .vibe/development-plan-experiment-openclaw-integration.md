@@ -196,6 +196,15 @@
 - `Makefile`
   - Removed hardcoded startup/status endpoints and now loads runtime parameters from `.env` / `.env.openclaw` (`MC_URL_SCHEME`, `MC_HOST`, `MC_PORT`, `OPENCLAW_STATUS_HOST`, `OPENCLAW_GATEWAY_PORT`, `OPENCLAW_CONTROL_UI_PORT`).
   - `openclaw-status` token check now accepts `OPENCLAW_GATEWAY_TOKEN` from either `.env` or `.env.openclaw`.
+- `Makefile`
+  - Added env-driven mode switch `MC_MODE=prod|dev` and OpenClaw lifecycle toggle `OPENCLAW_ENABLED=1|0`.
+  - Unified primary lifecycle: `make up`, `make restart`, `make down`, `make status` now operate in selected mode and include OpenClaw automatically when enabled.
+  - Kept compatibility aliases (`dev-up`, `dev-restart`, `dev-down`, `dev-ps`) mapped to the unified flow.
+  - Reduced default `make help` output to minimal operator commands; added `make help-all` for full target listing.
+- `.env.example` / `.env.openclaw.example`
+  - Added documented defaults/toggles for `MC_MODE` and `OPENCLAW_ENABLED`.
+- `docs/deployment.md` / `docs/ops-cheatsheet.md`
+  - Updated operator UX to mode-driven minimal commands (`up/restart/down/status`) and removed requirement for separate `openclaw-up` in normal startup.
 - `docker-compose-openclaw.yml`
   - Replaced hardcoded gateway/bridge startup ports with env-driven host/internal port mappings (`OPENCLAW_GATEWAY_PORT`, `OPENCLAW_BRIDGE_PORT`, `OPENCLAW_GATEWAY_INTERNAL_PORT`, `OPENCLAW_BRIDGE_INTERNAL_PORT`).
   - Gateway launch and healthcheck now use `OPENCLAW_GATEWAY_INTERNAL_PORT` (no embedded literal port).
@@ -335,7 +344,7 @@
     - `bd ready --json`
       - Failed (environment issue): `database "mission_control" not found on Dolt server at 127.0.0.1:13870`.
     - `make help`
-      - Shows explicit prod/dev/update targets including `dev-up`, `dev-restart`, `upgrade`, `upgrade-dev`, `upgrade-openclaw`.
+      - Shows minimal primary commands (`up`, `restart`, `down`, `status`) plus `help-all` for full target list.
     - `make status`
       - Returned HTTP `200` for `http://127.0.0.1:7012/login` and CLI reachability (`claude`, `codex`, `gemini`).
     - `make dev-ps`
@@ -346,6 +355,20 @@
       - Restarted prod Mission Control and conditionally restarted `mc-openclaw-gateway`; readiness probe returned 200.
     - `make down && make dev-up && make dev-restart`
       - Switched to dev stack, then verified dev restart path and conditional gateway restart; readiness probe returned 200.
+
+14. Unified mode-aware lifecycle verification (2026-05-04)
+    - `MC_MODE=prod OPENCLAW_ENABLED=1 make up`
+      - Started prod Mission Control and OpenClaw stack in one command.
+    - `MC_MODE=prod OPENCLAW_ENABLED=1 make status`
+      - Reported `Mode: prod`, MC URL status, and OpenClaw gateway/control endpoint health.
+    - `MC_MODE=prod OPENCLAW_ENABLED=1 make restart`
+      - Restarted prod Mission Control and OpenClaw (restart-or-up behavior).
+    - `MC_MODE=dev OPENCLAW_ENABLED=1 make up`
+      - Started dev Mission Control and OpenClaw stack in one command.
+    - `MC_MODE=dev OPENCLAW_ENABLED=1 make status`
+      - Reported `Mode: dev`, `mission-control-dev` container checks, and OpenClaw endpoint health.
+    - `MC_MODE=dev OPENCLAW_ENABLED=1 make restart`
+      - Restarted dev Mission Control and OpenClaw (restart-or-up behavior).
 
 ## Finalize
 <!-- beads-phase-id: TBD -->
