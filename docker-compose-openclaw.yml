@@ -140,21 +140,23 @@ services:
           }
           const gateway=(config.gateway && typeof config.gateway==='object' && !Array.isArray(config.gateway)) ? config.gateway : {};
           const controlUi=(gateway.controlUi && typeof gateway.controlUi==='object' && !Array.isArray(gateway.controlUi)) ? gateway.controlUi : {};
-          const trimEnv=(name)=>String(process.env[name]||'').trim();
-          const parseBoolEnv=(name, fallback)=>{
+          const hasEnv=(name)=>Object.prototype.hasOwnProperty.call(process.env, name);
+          const trimEnv=(name)=>hasEnv(name) ? String(process.env[name]||'').trim() : '';
+          const parseOptionalBoolEnv=(name)=>{
+            if (!hasEnv(name)) return null;
             const normalized=trimEnv(name).toLowerCase();
-            if (!normalized) return fallback;
+            if (!normalized) return null;
             if (['1','true','yes','on'].includes(normalized)) return true;
             if (['0','false','no','off'].includes(normalized)) return false;
-            return fallback;
+            return null;
           };
           const gatewayToken=trimEnv('OPENCLAW_GATEWAY_TOKEN');
-          const toolsProfile=trimEnv('OPENCLAW_TOOLS_PROFILE') || 'coding';
-          const forceWorkspaceOnly=parseBoolEnv('OPENCLAW_SECURITY_WORKSPACE_ONLY', true);
-          const denyAutomation=parseBoolEnv('OPENCLAW_SECURITY_DENY_AUTOMATION', true);
-          const denyRuntime=parseBoolEnv('OPENCLAW_SECURITY_DENY_RUNTIME', true);
-          const denyFs=parseBoolEnv('OPENCLAW_SECURITY_DENY_FS', false);
-          const forceSandboxAll=parseBoolEnv('OPENCLAW_SECURITY_SANDBOX_ALL', true);
+          const toolsProfile=trimEnv('OPENCLAW_TOOLS_PROFILE');
+          const workspaceOnlyToggle=parseOptionalBoolEnv('OPENCLAW_SECURITY_WORKSPACE_ONLY');
+          const denyAutomation=parseOptionalBoolEnv('OPENCLAW_SECURITY_DENY_AUTOMATION');
+          const denyRuntime=parseOptionalBoolEnv('OPENCLAW_SECURITY_DENY_RUNTIME');
+          const denyFs=parseOptionalBoolEnv('OPENCLAW_SECURITY_DENY_FS');
+          const sandboxModeAll=parseOptionalBoolEnv('OPENCLAW_SECURITY_SANDBOX_ALL');
           const managedDenyGroups=new Set(['group:automation','group:runtime','group:fs']);
           const telegramBotToken=trimEnv('TELEGRAM_BOT_TOKEN');
           const telegramOwnerIdRaw=trimEnv('TELEGRAM_NUMERIC_USER_ID');
@@ -278,38 +280,59 @@ services:
           config.commands=commands;
 
           const tools=(config.tools && typeof config.tools==='object' && !Array.isArray(config.tools)) ? config.tools : {};
-          tools.profile=toolsProfile;
+          if (toolsProfile) {
+            tools.profile=toolsProfile;
+          }
           const fsTools=(tools.fs && typeof tools.fs==='object' && !Array.isArray(tools.fs)) ? tools.fs : {};
-          if (forceWorkspaceOnly) {
-            fsTools.workspaceOnly=true;
+          if (workspaceOnlyToggle !== null) {
+            fsTools.workspaceOnly=workspaceOnlyToggle;
           }
-          tools.fs=fsTools;
+          if (Object.keys(fsTools).length>0) {
+            tools.fs=fsTools;
+          }
 
-          const desiredDenyGroups=[];
-          if (denyAutomation) desiredDenyGroups.push('group:automation');
-          if (denyRuntime) desiredDenyGroups.push('group:runtime');
-          if (denyFs) desiredDenyGroups.push('group:fs');
-          const existingDeny=Array.isArray(tools.deny) ? tools.deny : [];
-          const normalizedDeny=[];
-          for (const entry of existingDeny) {
-            const normalized=String(entry||'').trim();
-            if (!normalized || managedDenyGroups.has(normalized) || normalizedDeny.includes(normalized)) continue;
-            normalizedDeny.push(normalized);
+          const shouldManageDeny=[denyAutomation, denyRuntime, denyFs].some((value)=>value!==null);
+          if (shouldManageDeny) {
+            const desiredDenyGroups=[];
+            if (denyAutomation) desiredDenyGroups.push('group:automation');
+            if (denyRuntime) desiredDenyGroups.push('group:runtime');
+            if (denyFs) desiredDenyGroups.push('group:fs');
+            const existingDeny=Array.isArray(tools.deny) ? tools.deny : [];
+            const normalizedDeny=[];
+            for (const entry of existingDeny) {
+              const normalized=String(entry||'').trim();
+              if (!normalized || managedDenyGroups.has(normalized) || normalizedDeny.includes(normalized)) continue;
+              normalizedDeny.push(normalized);
+            }
+            for (const entry of desiredDenyGroups) {
+              if (!normalizedDeny.includes(entry)) normalizedDeny.push(entry);
+            }
+            tools.deny=normalizedDeny;
           }
-          for (const entry of desiredDenyGroups) {
-            if (!normalizedDeny.includes(entry)) normalizedDeny.push(entry);
-          }
-          tools.deny=normalizedDeny;
           config.tools=tools;
 
-          if (forceSandboxAll) {
+          if (sandboxModeAll !== null) {
             const agents=(config.agents && typeof config.agents==='object' && !Array.isArray(config.agents)) ? config.agents : {};
             const defaults=(agents.defaults && typeof agents.defaults==='object' && !Array.isArray(agents.defaults)) ? agents.defaults : {};
             const sandbox=(defaults.sandbox && typeof defaults.sandbox==='object' && !Array.isArray(defaults.sandbox)) ? defaults.sandbox : {};
-            sandbox.mode='all';
-            defaults.sandbox=sandbox;
-            agents.defaults=defaults;
-            config.agents=agents;
+            if (sandboxModeAll) {
+              sandbox.mode='all';
+            } else if ('mode' in sandbox) {
+              delete sandbox.mode;
+            }
+            if (Object.keys(sandbox).length>0) {
+              defaults.sandbox=sandbox;
+            } else if ('sandbox' in defaults) {
+              delete defaults.sandbox;
+            }
+            if (Object.keys(defaults).length>0) {
+              agents.defaults=defaults;
+            } else if ('defaults' in agents) {
+              delete agents.defaults;
+            }
+            if (Object.keys(agents).length>0) {
+              config.agents=agents;
+            }
           }
 
           fs.writeFileSync(configPath, JSON.stringify(config, null, 2)+'\n');

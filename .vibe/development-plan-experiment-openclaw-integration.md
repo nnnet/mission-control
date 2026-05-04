@@ -502,24 +502,20 @@
     - Updated parser tests to assert informational security lines remain visible in `raw` output while preserving healthy classification behavior.
 
 21. OpenClaw env-driven security defaults hardening (2026-05-04)
-    - Implemented env-backed secure defaults projection into both OpenClaw state files:
-      - Gateway bootstrap (`docker-compose-openclaw.yml` prestart JS) now applies to `.openclaw-data/openclaw.json`.
-      - MC CLI shim bootstrap (`scripts/openclaw-cli-shim.py`) now applies to `.mc-openclaw/openclaw.json`.
-    - Added/standardized env controls (secure-by-default):
-      - `OPENCLAW_TOOLS_PROFILE` (default `coding`)
-      - `OPENCLAW_SECURITY_WORKSPACE_ONLY` (default `1`)
-      - `OPENCLAW_SECURITY_DENY_AUTOMATION` (default `1`)
-      - `OPENCLAW_SECURITY_DENY_RUNTIME` (default `1`)
-      - `OPENCLAW_SECURITY_DENY_FS` (default `0`, explicit opt-in because it can break workflows)
-      - `OPENCLAW_SECURITY_SANDBOX_ALL` (default `1`)
-    - Effective defaults now enforce unless explicitly disabled by env:
-      - `tools.fs.workspaceOnly = true`
-      - `tools.deny` includes `group:automation` + `group:runtime` (and `group:fs` only when enabled)
-      - `agents.defaults.sandbox.mode = "all"`
+    - Bootstraps now project tool/fs/sandbox settings only when env vars are present (no hardcoded defaults in JS/Python shims); secure defaults are injected via compose `${VAR:-...}` env wiring instead.
+    - Propagated the security posture envs to MC prod/dev containers and the OpenClaw stack so both state roots consume the same values.
+    - Added/standardized env controls (secure defaults provided by compose):
+      - `OPENCLAW_TOOLS_PROFILE`
+      - `OPENCLAW_SECURITY_WORKSPACE_ONLY`
+      - `OPENCLAW_SECURITY_DENY_AUTOMATION`
+      - `OPENCLAW_SECURITY_DENY_RUNTIME`
+      - `OPENCLAW_SECURITY_DENY_FS`
+      - `OPENCLAW_SECURITY_SANDBOX_ALL`
+    - Documentation/examples updated to reflect env-driven projection and secure compose defaults.
     - Verification runbook:
       - Restarted MC + OpenClaw services so bootstrap projection re-applied.
-      - Captured `jq` evidence from both state files for tools/profile/fs/deny/sandbox.
-      - Ran `make openclaw-status` and post-restart `openclaw doctor`/`openclaw security audit --deep` snippets.
+      - Captured `jq` evidence from both state files for tools/profile/fs/deny/sandbox driven by env.
+      - Confirmed doctor security posture is clean once env-driven defaults are present.
 
 ## Finalize
 <!-- beads-phase-id: TBD -->

@@ -114,19 +114,19 @@ def merged_unique(existing: object, additions: List[str]) -> List[str]:
     return merged
 
 
-def parse_env_toggle(name: str, default: bool) -> bool:
+def read_env_toggle(name: str) -> Optional[bool]:
     raw_value = os.environ.get(name)
     if raw_value is None:
-        return default
+        return None
 
     normalized = raw_value.strip().lower()
     if not normalized:
-        return default
+        return None
     if normalized in TRUTHY_ENV_VALUES:
         return True
     if normalized in FALSY_ENV_VALUES:
         return False
-    return default
+    return None
 
 
 def project_security_defaults(config: dict) -> None:
@@ -134,38 +134,66 @@ def project_security_defaults(config: dict) -> None:
     if not isinstance(tools, dict):
         tools = {}
 
-    tools_profile = str(os.environ.get("OPENCLAW_TOOLS_PROFILE", "coding")).strip() or "coding"
-    tools["profile"] = tools_profile
+    tools_profile_raw = os.environ.get("OPENCLAW_TOOLS_PROFILE")
+    if tools_profile_raw is not None:
+        tools_profile = tools_profile_raw.strip()
+        if tools_profile:
+            tools["profile"] = tools_profile
 
     fs_tools = tools.get("fs")
     if not isinstance(fs_tools, dict):
         fs_tools = {}
-    if parse_env_toggle("OPENCLAW_SECURITY_WORKSPACE_ONLY", default=True):
-        fs_tools["workspaceOnly"] = True
-    tools["fs"] = fs_tools
+    workspace_only_toggle = read_env_toggle("OPENCLAW_SECURITY_WORKSPACE_ONLY")
+    if workspace_only_toggle is not None:
+        fs_tools["workspaceOnly"] = workspace_only_toggle
+    if fs_tools:
+        tools["fs"] = fs_tools
 
-    desired_deny_groups: List[str] = []
-    if parse_env_toggle("OPENCLAW_SECURITY_DENY_AUTOMATION", default=True):
-        desired_deny_groups.append("group:automation")
-    if parse_env_toggle("OPENCLAW_SECURITY_DENY_RUNTIME", default=True):
-        desired_deny_groups.append("group:runtime")
-    if parse_env_toggle("OPENCLAW_SECURITY_DENY_FS", default=False):
-        desired_deny_groups.append("group:fs")
+    deny_toggles = {
+        "automation": read_env_toggle("OPENCLAW_SECURITY_DENY_AUTOMATION"),
+        "runtime": read_env_toggle("OPENCLAW_SECURITY_DENY_RUNTIME"),
+        "fs": read_env_toggle("OPENCLAW_SECURITY_DENY_FS"),
+    }
 
-    existing_deny = tools.get("deny")
-    preserved_deny: List[str] = []
-    if isinstance(existing_deny, list):
-        for entry in existing_deny:
-            normalized = str(entry).strip()
-            if not normalized or normalized in MANAGED_DENY_GROUPS:
-                continue
-            if normalized not in preserved_deny:
-                preserved_deny.append(normalized)
+    if any(value is not None for value in deny_toggles.values()):
+        desired_deny_groups: List[str] = []
+        if deny_toggles["automation"]:
+            desired_deny_groups.append("group:automation")
+        if deny_toggles["runtime"]:
+            desired_deny_groups.append("group:runtime")
+        if deny_toggles["fs"]:
+            desired_deny_groups.append("group:fs")
 
-    tools["deny"] = merged_unique(preserved_deny, desired_deny_groups)
+        existing_deny = tools.get("deny")
+        preserved_deny: List[str] = []
+        if isinstance(existing_deny, list):
+            for entry in existing_deny:
+                normalized = str(entry).strip()
+                if not normalized or normalized in MANAGED_DENY_GROUPS:
+                    continue
+                if normalized not in preserved_deny:
+                    preserved_deny.append(normalized)
+
+        tools["deny"] = merged_unique(preserved_deny, desired_deny_groups)
+
     config["tools"] = tools
 
-    if not parse_env_toggle("OPENCLAW_SECURITY_SANDBOX_ALL", default=True):
+    sandbox_toggle = read_env_toggle("OPENCLAW_SECURITY_SANDBOX_ALL")
+    if sandbox_toggle is None:
+        return
+    if sandbox_toggle is False:
+        agents_section = config.get("agents") if isinstance(config.get("agents"), dict) else {}
+        defaults_section = agents_section.get("defaults") if isinstance(agents_section.get("defaults"), dict) else {}
+        sandbox = defaults_section.get("sandbox") if isinstance(defaults_section.get("sandbox"), dict) else {}
+        if "mode" in sandbox:
+            sandbox.pop("mode", None)
+        if sandbox:
+            defaults_section["sandbox"] = sandbox
+        elif "sandbox" in defaults_section:
+            defaults_section.pop("sandbox", None)
+        if defaults_section:
+            agents_section["defaults"] = defaults_section
+            config["agents"] = agents_section
         return
 
     agents = config.get("agents")

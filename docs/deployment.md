@@ -323,6 +323,12 @@ See `.env.example` for the full list. Key variables:
 | `PORT` | No | `3005` (direct) / `3000` (Docker) | Server port |
 | `OPENCLAW_HOME` | No | - | Legacy: parent home directory containing `.openclaw/`. Use `OPENCLAW_STATE_DIR` instead (see note below) |
 | `OPENCLAW_STATE_DIR` | No | `~/.openclaw` | Exact path to the OpenClaw state directory. Preferred over `OPENCLAW_HOME` — avoids double-nesting when the path already ends in `.openclaw` |
+| `OPENCLAW_TOOLS_PROFILE` | No | `coding` | Tool profile projected into OpenClaw config when the env var is present (compose injects the default) |
+| `OPENCLAW_SECURITY_WORKSPACE_ONLY` | No | `1` | Restrict filesystem tools to the workspace when set (env-driven) |
+| `OPENCLAW_SECURITY_DENY_AUTOMATION` | No | `1` | Deny automation tool group via env-driven bootstrap |
+| `OPENCLAW_SECURITY_DENY_RUNTIME` | No | `1` | Deny runtime tool group via env-driven bootstrap |
+| `OPENCLAW_SECURITY_DENY_FS` | No | `0` | Deny filesystem tool group (opt-in; can block file workflows) |
+| `OPENCLAW_SECURITY_SANDBOX_ALL` | No | `1` | Force `agents.defaults.sandbox.mode="all"` when set (env-driven) |
 | `MISSION_CONTROL_DATA_DIR` | No | `.data/` | Directory for all Mission Control data files (DB, tokens, etc.). Use an absolute path with the standalone server to survive rebuilds. |
 | `MC_ALLOWED_HOSTS` | No | `localhost,127.0.0.1` | Allowed hosts in production |
 | `MC_PORT` | No | `3000` | Host-side port that the bundled `docker-compose.yml` publishes the container's `PORT` on. The bundled `Makefile` expects `7012`. |
