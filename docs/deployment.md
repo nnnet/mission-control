@@ -315,6 +315,22 @@ docker compose -f docker-compose.yml -f docker-compose.hardened.yml up -d
 
 This adds: JSON logging, strict hostname allowlist, secure cookies, HSTS, internal-only network.
 
+### Host hardening (Ubuntu quick actions)
+
+- **Firewall (ufw)**: `sudo apt-get install -y ufw && sudo ufw allow OpenSSH && sudo ufw enable && sudo ufw status`
+- **Time sync (NTP)**: `timedatectl set-ntp true && timedatectl status` (ensures systemd-timesyncd is active)
+- **Automatic security updates**: `sudo apt-get install -y unattended-upgrades && sudo dpkg-reconfigure -plow unattended-upgrades && sudo unattended-upgrade -d`
+- **Brute-force protection (fail2ban)**: `sudo apt-get install -y fail2ban && sudo systemctl enable --now fail2ban` (tune `/etc/fail2ban/jail.local` as needed)
+- **/tmp noexec**: add `tmpfs /tmp tmpfs defaults,noexec,nosuid,nodev 0 0` to `/etc/fstab`, then `sudo mount -o remount /tmp`
+- **Encrypted data (LUKS)**: create/attach a LUKS volume for data (`sudo cryptsetup luksFormat /dev/sdX && sudo cryptsetup open /dev/sdX mc-data && sudo mkfs.ext4 /dev/mapper/mc-data`) and mount it for `.data/` or backups
+- **MAC framework**: keep AppArmor enabled (`sudo systemctl enable --now apparmor && sudo aa-status`); 
+  Ubuntu SELinux users can install `selinux-basics selinux-policy-default` and enable per Ubuntu guidance
+  - sudo apt update
+  - sudo apt install selinux-basics selinux-policy-default
+  - sudo selinux-activate
+  - sudo reboot
+  - sudo apt install policycoreutils; sestatus # check status
+
 ## Environment Variables
 
 See `.env.example` for the full list. Key variables:

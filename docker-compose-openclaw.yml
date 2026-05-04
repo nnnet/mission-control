@@ -97,6 +97,9 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENCLAW_MESSAGES_GROUPCHAT_VISIBLE_REPLIES: ${OPENCLAW_MESSAGES_GROUPCHAT_VISIBLE_REPLIES:-automatic}
+      MC_ORIGIN_HOST: ${MC_ORIGIN_HOST:-127.0.0.1}
+      MC_ORIGIN_PORT: ${MC_ORIGIN_PORT:-7012}
+      OPENCLAW_EXTRA_ALLOWED_ORIGINS: ${OPENCLAW_EXTRA_ALLOWED_ORIGINS:-}
 
     env_file:
       - path: .env
@@ -234,6 +237,11 @@ services:
         const shouldBootstrapTelegram = telegramBotToken.length>0 || telegramAllowFrom.length>0 || telegramOwnerAllowFrom.length>0 || telegramLegacyOwnerIds.length>0 || telegramDmPolicyRaw.length>0;
         const gatewayPort=trimEnv('OPENCLAW_GATEWAY_INTERNAL_PORT') || '18789';
         const controlUiPort=trimEnv('OPENCLAW_CONTROL_UI_PORT') || '18791';
+        const mcScheme=trimEnv('MC_URL_SCHEME') || 'http';
+        const mcHost=trimEnv('MC_HOST') || '127.0.0.1';
+        const mcPortRaw=trimEnv('MC_PORT') || '7012';
+        const mcPort=mcPortRaw.length>0 ? mcPortRaw : '';
+        const missionControlOrigin=[mcScheme,'://',mcHost, mcPort ? ':'+mcPort : ''].join('');
         const normalizedOrigins=Array.isArray(controlUi.allowedOrigins)
           ? controlUi.allowedOrigins.filter((origin)=>typeof origin==='string' && origin.trim().length>0)
           : [];
@@ -243,6 +251,9 @@ services:
           'http://localhost:'+controlUiPort,
           'http://127.0.0.1:'+controlUiPort,
         ];
+        if (missionControlOrigin.trim().length>0) {
+          requiredOrigins.push(missionControlOrigin);
+        }
         for (const origin of requiredOrigins) {
           if (!normalizedOrigins.includes(origin)) normalizedOrigins.push(origin);
         }
@@ -429,6 +440,9 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       OPENCLAW_MESSAGES_GROUPCHAT_VISIBLE_REPLIES: ${OPENCLAW_MESSAGES_GROUPCHAT_VISIBLE_REPLIES:-automatic}
+      MC_ORIGIN_HOST: ${MC_ORIGIN_HOST:-127.0.0.1}
+      MC_ORIGIN_PORT: ${MC_ORIGIN_PORT:-7012}
+      OPENCLAW_EXTRA_ALLOWED_ORIGINS: ${OPENCLAW_EXTRA_ALLOWED_ORIGINS:-}
 
     env_file:
       - path: .env

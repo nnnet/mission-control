@@ -309,6 +309,30 @@ def ensure_openclaw_state_defaults() -> None:
         config["channels"] = channels
 
     config["commands"] = commands
+
+    visible_replies_raw = str(os.environ.get("OPENCLAW_MESSAGES_GROUPCHAT_VISIBLE_REPLIES", "")).strip()
+    messages_section = config.get("messages")
+    if not isinstance(messages_section, dict):
+        messages_section = {}
+
+    group_chat = messages_section.get("groupChat")
+    if not isinstance(group_chat, dict):
+        group_chat = {}
+
+    existing_visible_replies = group_chat.get("visibleReplies") if isinstance(group_chat.get("visibleReplies"), str) else ""
+    visible_replies_changed = False
+
+    if visible_replies_raw:
+        group_chat["visibleReplies"] = visible_replies_raw
+        visible_replies_changed = True
+    elif existing_visible_replies.strip() == "message_tool":
+        group_chat["visibleReplies"] = "automatic"
+        visible_replies_changed = True
+
+    if visible_replies_changed:
+        messages_section["groupChat"] = group_chat
+        config["messages"] = messages_section
+
     project_security_defaults(config)
 
     config_path.parent.mkdir(parents=True, exist_ok=True)

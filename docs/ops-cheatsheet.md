@@ -92,3 +92,7 @@ OpenClaw Control UI:    http://127.0.0.1:18791/
 ```
 
 Defaults come from `MC_URL_SCHEME`, `MC_HOST`, `MC_PORT`, `OPENCLAW_STATUS_HOST`, `OPENCLAW_GATEWAY_PORT`, and `OPENCLAW_CONTROL_UI_PORT` in `.env` / `.env.openclaw`.
+
+## 8) Host hardening reference
+
+Ubuntu quick actions for firewall/NTP/auto-updates/fail2ban/tmp/AppArmor/LUKS: see [Deployment Guide → Host hardening](./deployment.md#host-hardening-ubuntu-quick-actions).
