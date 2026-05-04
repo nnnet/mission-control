@@ -24,6 +24,7 @@
 - Added local-only Control UI device auto-approval sidecar (`mc-openclaw-control-ui-autopair`) that watches pending pair requests and auto-approves only local Docker Control UI requests (`clientId=openclaw-control-ui`, private/loopback IP, `gateway.mode=local`).
 - Standardized Make lifecycle UX to universal verbs (`up/down/restart/status/update/rebuild/upgrade`) with optional scope selectors (`all|mc|openclaw`) instead of mode-specific target names.
 - Added explicit scope-aware update workflows for fast-moving MC/OpenClaw versions (`update`, `rebuild`, `upgrade`, `openclaw-update`) and positional mode overrides (`dev`, `prod`).
+- Gateway/CLI now run from prebuilt `mc-openclaw:dockercli` (Docker CLI baked in), mount `/var/run/docker.sock` read/write with gid auto-detected or overridden via `DOCKER_SOCKET_GID`, start as root for setup, and drop to `node` for runtime to clear sandbox warnings.
 
 ## Notes
 *Additional context and observations*
@@ -110,6 +111,7 @@
 - `docker-compose-openclaw.yml`
   - Kept dedicated `openclaw-control-ui` service on `:18791`, but switched it from static-only serving to reverse-proxy topology for gateway APIs/WebSockets.
   - Added nginx config mount so Control UI static assets are served while `/__openclaw/*`, `/api/*`, `/ws`, and `/gateway-ws` are proxied to `openclaw-gateway:18789`.
+  - Added Docker socket bind-mount (`/var/run/docker.sock`) to `mc-openclaw-gateway` so sandbox mode can launch Docker-based tool sandboxes when `OPENCLAW_SECURITY_SANDBOX_ALL` is enabled.
 - `docker/openclaw-control-ui.nginx.conf`
   - New reverse-proxy config enabling same-origin gateway API + WS upgrades to prevent UI disconnect `1006` on port `18791`.
   - WS proxy locations now intentionally omit `X-Forwarded-*` headers so gateway locality resolves as local-browser-container traffic (`browser_container_local`) instead of remote-proxied traffic; this restores silent local pairing and removes repeated `4008 connect failed` from `NOT_PAIRED`.
@@ -516,6 +518,29 @@
       - Restarted MC + OpenClaw services so bootstrap projection re-applied.
       - Captured `jq` evidence from both state files for tools/profile/fs/deny/sandbox driven by env.
       - Confirmed doctor security posture is clean once env-driven defaults are present.
+
+22. Sandbox docker socket verification (2026-05-04)
+    - Compose now mounts `/var/run/docker.sock` into `mc-openclaw-gateway` so sandboxed agents can reach Docker when `OPENCLAW_SECURITY_SANDBOX_ALL=1`.
+    - After restarting the OpenClaw stack, `make openclaw-status` should report a clean doctor output with sandbox enabled. If the env is set to `0`, sandbox warnings remain expected until the env is flipped.
+
+23. Visible-replies + sandbox readiness hardening (2026-05-04)
+    - Gateway prestart now installs Docker CLI if missing before launching `node dist/index.js`, keeping sandbox mode functional when `OPENCLAW_SECURITY_SANDBOX_ALL=1` with the host socket bind-mounted.
+    - Gateway and MC CLI shim both project `OPENCLAW_MESSAGES_GROUPCHAT_VISIBLE_REPLIES` when set; otherwise they coerce legacy `message_tool` config values to `automatic` to silence doctor warnings.
+    - OpenClaw CLI container now runs as root, mounts `/var/run/docker.sock` rw, and bootstraps Docker CLI on-demand before forwarding to `node dist/index.js`, allowing `openclaw doctor` to validate sandbox without socket/CLI errors.
+    - Built sandbox base image (`openclaw-sandbox:bookworm-slim`) via `scripts/sandbox-setup.sh` using the host Docker daemon to clear sandbox image warnings.
+    - Verification:
+      - `make openclaw-status` → Gateway HTTP 200 / Control UI 200 / MC->Gateway OK.
+      - `make openclaw-doctor` → no visibleReplies/sandbox-Docker warnings; remaining items limited to plugin registry + transcript integrity and expected LAN binding notice.
+
+24. Gateway/CLI non-root runtime with docker group detection (2026-05-04)
+    - `docker-compose-openclaw.yml`: gateway and CLI containers start as root only for setup, auto-install Docker CLI when missing, detect `/var/run/docker.sock` gid (override with `DOCKER_SOCKET_GID`), create/resolve the group, add `node` to it, chown OpenClaw state, then `su` to `node` for the real processes.
+    - Docs: `.env.example` / `.env.openclaw.example` now describe `DOCKER_SOCKET_GID`, rw docker.sock bind requirement for sandbox, and visibleReplies env behavior.
+
+25. Verification (2026-05-04)
+    - `make restart openclaw` → stack recycled with new non-root docker group setup.
+    - `make openclaw-status` → Gateway HTTP 200 / Control UI 200 / MC->Gateway OK (after short wait).
+    - `make openclaw-doctor` → no visibleReplies or sandbox/Docker warnings; only expected plugin registry, transcript integrity, and LAN-binding notices.
+    - `jq '{visibleReplies:.messages.groupChat.visibleReplies, sandboxMode:.agents.defaults.sandbox.mode, tools:.tools}' .openclaw-data/openclaw.json` → visibleReplies `automatic`, sandbox `all`, tools profile `coding`, fs.workspaceOnly `true`, deny `[group:automation, group:runtime]`.
 
 ## Finalize
 <!-- beads-phase-id: TBD -->

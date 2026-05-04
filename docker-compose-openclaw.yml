@@ -59,15 +59,13 @@ services:
         echo "==> done — dist + node_modules populated under ./openclaw-src/"
 
   openclaw-gateway:
-    image: node:24-bookworm
+    image: mc-openclaw:dockercli
     container_name: mc-openclaw-gateway
     init: true
     restart: unless-stopped
     working_dir: /app
-    # Run as the host user (uid 1000) so files written into bind-mounted
-    # ./.openclaw-data and ./openclaw-src are readable/writable on the host
-    # without sudo. The stock node:24-bookworm image's `node` user is uid 1000.
-    user: "1000:1000"
+    # Run as root for sandbox/docker access during setup; drop to node for runtime.
+    user: root
 
     environment:
       HOME: /home/node
@@ -79,6 +77,7 @@ services:
       TELEGRAM_DM_POLICY: ${TELEGRAM_DM_POLICY:-}
       TELEGRAM_ALLOW_FROM: ${TELEGRAM_ALLOW_FROM:-}
       TELEGRAM_OWNER_ALLOW_FROM: ${TELEGRAM_OWNER_ALLOW_FROM:-}
+      DOCKER_SOCKET_GID: ${DOCKER_SOCKET_GID:-}
       OPENCLAW_TOOLS_PROFILE: ${OPENCLAW_TOOLS_PROFILE:-coding}
       OPENCLAW_SECURITY_WORKSPACE_ONLY: ${OPENCLAW_SECURITY_WORKSPACE_ONLY:-1}
       OPENCLAW_SECURITY_DENY_AUTOMATION: ${OPENCLAW_SECURITY_DENY_AUTOMATION:-1}
@@ -88,15 +87,16 @@ services:
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
       OPENCLAW_DISABLE_BONJOUR: ${OPENCLAW_DISABLE_BONJOUR:-1}
       # Plugin runtime stage dir lives under bind-mounted state so it inherits
-      # uid 1000 ownership and survives container recreate. Avoid the default
+      # host permissions and survives container recreate. Avoid the default
       # /var/lib/openclaw/* path because Docker named volumes are root-owned
-      # and our container runs as uid 1000.
+      # and our container runs as uid 0 for sandboxing.
       OPENCLAW_PLUGIN_STAGE_DIR: /home/node/.openclaw/plugin-runtime-deps
       OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENCLAW_MESSAGES_GROUPCHAT_VISIBLE_REPLIES: ${OPENCLAW_MESSAGES_GROUPCHAT_VISIBLE_REPLIES:-automatic}
 
     env_file:
       - path: .env
@@ -112,6 +112,8 @@ services:
       # plugin-runtime-deps stage). All under one bind-mount so ownership
       # is consistent.
       - ./.openclaw-data:/home/node/.openclaw
+      # Docker socket required for sandbox tool runtime access (env-driven).
+      - /var/run/docker.sock:/var/run/docker.sock:rw
 
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -122,222 +124,257 @@ services:
 
     entrypoint: ["bash", "-lc"]
     command:
-      - >
-        mkdir -p /home/node/.openclaw/credentials &&
-        node -e "
-          const fs=require('node:fs');
-          const path=require('node:path');
-          const configPath=process.env.OPENCLAW_CONFIG_PATH||'/home/node/.openclaw/openclaw.json';
-          fs.mkdirSync(path.dirname(configPath), { recursive: true });
-          let config={};
-          if (fs.existsSync(configPath)) {
-            try {
-              const parsed=JSON.parse(fs.readFileSync(configPath, 'utf8'));
-              if (parsed && typeof parsed==='object' && !Array.isArray(parsed)) config=parsed;
-            } catch (error) {
-              throw new Error('Invalid OpenClaw config JSON at '+configPath+': '+error.message);
-            }
+      - |
+        set -e
+
+        gateway_bind="${OPENCLAW_GATEWAY_BIND:-lan}"
+        gateway_port="${OPENCLAW_GATEWAY_INTERNAL_PORT:-18789}"
+
+        node - <<'NODE'
+        const fs=require('node:fs');
+        const path=require('node:path');
+        const configPath=process.env.OPENCLAW_CONFIG_PATH||'/home/node/.openclaw/openclaw.json';
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        let config={};
+        if (fs.existsSync(configPath)) {
+          try {
+            const parsed=JSON.parse(fs.readFileSync(configPath, 'utf8'));
+            if (parsed && typeof parsed==='object' && !Array.isArray(parsed)) config=parsed;
+          } catch (error) {
+            throw new Error('Invalid OpenClaw config JSON at '+configPath+': '+error.message);
           }
-          const gateway=(config.gateway && typeof config.gateway==='object' && !Array.isArray(config.gateway)) ? config.gateway : {};
-          const controlUi=(gateway.controlUi && typeof gateway.controlUi==='object' && !Array.isArray(gateway.controlUi)) ? gateway.controlUi : {};
-          const hasEnv=(name)=>Object.prototype.hasOwnProperty.call(process.env, name);
-          const trimEnv=(name)=>hasEnv(name) ? String(process.env[name]||'').trim() : '';
-          const parseOptionalBoolEnv=(name)=>{
-            if (!hasEnv(name)) return null;
-            const normalized=trimEnv(name).toLowerCase();
-            if (!normalized) return null;
-            if (['1','true','yes','on'].includes(normalized)) return true;
-            if (['0','false','no','off'].includes(normalized)) return false;
-            return null;
-          };
-          const gatewayToken=trimEnv('OPENCLAW_GATEWAY_TOKEN');
-          const toolsProfile=trimEnv('OPENCLAW_TOOLS_PROFILE');
-          const workspaceOnlyToggle=parseOptionalBoolEnv('OPENCLAW_SECURITY_WORKSPACE_ONLY');
-          const denyAutomation=parseOptionalBoolEnv('OPENCLAW_SECURITY_DENY_AUTOMATION');
-          const denyRuntime=parseOptionalBoolEnv('OPENCLAW_SECURITY_DENY_RUNTIME');
-          const denyFs=parseOptionalBoolEnv('OPENCLAW_SECURITY_DENY_FS');
-          const sandboxModeAll=parseOptionalBoolEnv('OPENCLAW_SECURITY_SANDBOX_ALL');
-          const managedDenyGroups=new Set(['group:automation','group:runtime','group:fs']);
-          const telegramBotToken=trimEnv('TELEGRAM_BOT_TOKEN');
-          const telegramOwnerIdRaw=trimEnv('TELEGRAM_NUMERIC_USER_ID');
-          const telegramDmPolicyRaw=trimEnv('TELEGRAM_DM_POLICY').toLowerCase();
-          const telegramAllowFromRaw=trimEnv('TELEGRAM_ALLOW_FROM');
-          const telegramOwnerAllowFromRaw=trimEnv('TELEGRAM_OWNER_ALLOW_FROM');
-          const commands=(config.commands && typeof config.commands==='object' && !Array.isArray(config.commands)) ? config.commands : {};
-          const parseCsv=(raw)=>raw.split(',').map((entry)=>String(entry||'').trim()).filter(Boolean);
-          const parseNumericIds=(raw)=>{
-            const seen=new Set();
-            const out=[];
-            for (const entry of parseCsv(raw)) {
-              if (!/^[1-9][0-9]*$/.test(entry)) continue;
-              if (seen.has(entry)) continue;
-              seen.add(entry);
-              out.push(entry);
-            }
-            return out;
-          };
-          const normalizeOwnerIdentity=(entry)=>{
-            const value=String(entry||'').trim();
-            if (!value) return null;
-            if (/^[1-9][0-9]*$/.test(value)) return 'telegram:'+value;
-            const prefixed=value.match(/^telegram:([1-9][0-9]*)$/);
-            if (!prefixed) return null;
-            return 'telegram:'+prefixed[1];
-          };
-          const parseOwnerAllowFrom=(raw)=>{
-            const seen=new Set();
-            const out=[];
-            for (const entry of parseCsv(raw)) {
-              const normalized=normalizeOwnerIdentity(entry);
-              if (!normalized || seen.has(normalized)) continue;
-              seen.add(normalized);
-              out.push(normalized);
-            }
-            return out;
-          };
-          const mergeUnique=(existing, additions)=>{
-            const seen=new Set();
-            const out=[];
-            if (Array.isArray(existing)) {
-              for (const entry of existing) {
-                const normalized=String(entry||'').trim();
-                if (!normalized || seen.has(normalized)) continue;
-                seen.add(normalized);
-                out.push(normalized);
-              }
-            }
-            for (const entry of additions) {
+        }
+        const gateway=(config.gateway && typeof config.gateway==='object' && !Array.isArray(config.gateway)) ? config.gateway : {};
+        const controlUi=(gateway.controlUi && typeof gateway.controlUi==='object' && !Array.isArray(gateway.controlUi)) ? gateway.controlUi : {};
+        const hasEnv=(name)=>Object.prototype.hasOwnProperty.call(process.env, name);
+        const trimEnv=(name)=>hasEnv(name) ? String(process.env[name]||'').trim() : '';
+        const parseOptionalBoolEnv=(name)=>{
+          if (!hasEnv(name)) return null;
+          const normalized=trimEnv(name).toLowerCase();
+          if (!normalized) return null;
+          if (['1','true','yes','on'].includes(normalized)) return true;
+          if (['0','false','no','off'].includes(normalized)) return false;
+          return null;
+        };
+        const gatewayToken=trimEnv('OPENCLAW_GATEWAY_TOKEN');
+        const toolsProfile=trimEnv('OPENCLAW_TOOLS_PROFILE');
+        const workspaceOnlyToggle=parseOptionalBoolEnv('OPENCLAW_SECURITY_WORKSPACE_ONLY');
+        const denyAutomation=parseOptionalBoolEnv('OPENCLAW_SECURITY_DENY_AUTOMATION');
+        const denyRuntime=parseOptionalBoolEnv('OPENCLAW_SECURITY_DENY_RUNTIME');
+        const denyFs=parseOptionalBoolEnv('OPENCLAW_SECURITY_DENY_FS');
+        const sandboxModeAll=parseOptionalBoolEnv('OPENCLAW_SECURITY_SANDBOX_ALL');
+        const managedDenyGroups=new Set(['group:automation','group:runtime','group:fs']);
+        const telegramBotToken=trimEnv('TELEGRAM_BOT_TOKEN');
+        const telegramOwnerIdRaw=trimEnv('TELEGRAM_NUMERIC_USER_ID');
+        const telegramDmPolicyRaw=trimEnv('TELEGRAM_DM_POLICY').toLowerCase();
+        const telegramAllowFromRaw=trimEnv('TELEGRAM_ALLOW_FROM');
+        const telegramOwnerAllowFromRaw=trimEnv('TELEGRAM_OWNER_ALLOW_FROM');
+        const commands=(config.commands && typeof config.commands==='object' && !Array.isArray(config.commands)) ? config.commands : {};
+        const parseCsv=(raw)=>raw.split(',').map((entry)=>String(entry||'').trim()).filter(Boolean);
+        const parseNumericIds=(raw)=>{
+          const seen=new Set();
+          const out=[];
+          for (const entry of parseCsv(raw)) {
+            if (!/^[1-9][0-9]*$/.test(entry)) continue;
+            if (seen.has(entry)) continue;
+            seen.add(entry);
+            out.push(entry);
+          }
+          return out;
+        };
+        const normalizeOwnerIdentity=(entry)=>{
+          const value=String(entry||'').trim();
+          if (!value) return null;
+          if (/^[1-9][0-9]*$/.test(value)) return 'telegram:'+value;
+          const prefixed=value.match(/^telegram:([1-9][0-9]*)$/);
+          if (!prefixed) return null;
+          return 'telegram:'+prefixed[1];
+        };
+        const parseOwnerAllowFrom=(raw)=>{
+          const seen=new Set();
+          const out=[];
+          for (const entry of parseCsv(raw)) {
+            const normalized=normalizeOwnerIdentity(entry);
+            if (!normalized || seen.has(normalized)) continue;
+            seen.add(normalized);
+            out.push(normalized);
+          }
+          return out;
+        };
+        const mergeUnique=(existing, additions)=>{
+          const seen=new Set();
+          const out=[];
+          if (Array.isArray(existing)) {
+            for (const entry of existing) {
               const normalized=String(entry||'').trim();
               if (!normalized || seen.has(normalized)) continue;
               seen.add(normalized);
               out.push(normalized);
             }
-            return out;
+          }
+          for (const entry of additions) {
+            const normalized=String(entry||'').trim();
+            if (!normalized || seen.has(normalized)) continue;
+            seen.add(normalized);
+            out.push(normalized);
+          }
+          return out;
+        };
+        const validTelegramDmPolicies=new Set(['allowlist','pairing','open']);
+        const telegramLegacyOwnerIds=parseNumericIds(telegramOwnerIdRaw);
+        let telegramAllowFrom=parseNumericIds(telegramAllowFromRaw);
+        let telegramOwnerAllowFrom=parseOwnerAllowFrom(telegramOwnerAllowFromRaw);
+        if (telegramLegacyOwnerIds.length>0) {
+          telegramAllowFrom=mergeUnique(telegramAllowFrom, telegramLegacyOwnerIds);
+          telegramOwnerAllowFrom=mergeUnique(telegramOwnerAllowFrom, telegramLegacyOwnerIds.map((id)=>'telegram:'+id));
+        }
+        const telegramDmPolicy=validTelegramDmPolicies.has(telegramDmPolicyRaw)
+          ? telegramDmPolicyRaw
+          : (telegramLegacyOwnerIds.length>0 ? 'allowlist' : 'pairing');
+        const shouldBootstrapTelegram = telegramBotToken.length>0 || telegramAllowFrom.length>0 || telegramOwnerAllowFrom.length>0 || telegramLegacyOwnerIds.length>0 || telegramDmPolicyRaw.length>0;
+        const gatewayPort=trimEnv('OPENCLAW_GATEWAY_INTERNAL_PORT') || '18789';
+        const controlUiPort=trimEnv('OPENCLAW_CONTROL_UI_PORT') || '18791';
+        const normalizedOrigins=Array.isArray(controlUi.allowedOrigins)
+          ? controlUi.allowedOrigins.filter((origin)=>typeof origin==='string' && origin.trim().length>0)
+          : [];
+        const requiredOrigins=[
+          'http://localhost:'+gatewayPort,
+          'http://127.0.0.1:'+gatewayPort,
+          'http://localhost:'+controlUiPort,
+          'http://127.0.0.1:'+controlUiPort,
+        ];
+        for (const origin of requiredOrigins) {
+          if (!normalizedOrigins.includes(origin)) normalizedOrigins.push(origin);
+        }
+        controlUi.allowedOrigins=normalizedOrigins;
+        gateway.controlUi=controlUi;
+        gateway.mode='local';
+        if (gatewayToken.length>0) {
+          gateway.auth={
+            mode:'token',
+            token:{
+              source:'env',
+              provider:'default',
+              id:'OPENCLAW_GATEWAY_TOKEN',
+            },
           };
-          const validTelegramDmPolicies=new Set(['allowlist','pairing','open']);
-          const telegramLegacyOwnerIds=parseNumericIds(telegramOwnerIdRaw);
-          let telegramAllowFrom=parseNumericIds(telegramAllowFromRaw);
-          let telegramOwnerAllowFrom=parseOwnerAllowFrom(telegramOwnerAllowFromRaw);
-          if (telegramLegacyOwnerIds.length>0) {
-            telegramAllowFrom=mergeUnique(telegramAllowFrom, telegramLegacyOwnerIds);
-            telegramOwnerAllowFrom=mergeUnique(telegramOwnerAllowFrom, telegramLegacyOwnerIds.map((id)=>'telegram:'+id));
-          }
-          const telegramDmPolicy=validTelegramDmPolicies.has(telegramDmPolicyRaw)
-            ? telegramDmPolicyRaw
-            : (telegramLegacyOwnerIds.length>0 ? 'allowlist' : 'pairing');
-          const shouldBootstrapTelegram = telegramBotToken.length>0 || telegramAllowFrom.length>0 || telegramOwnerAllowFrom.length>0 || telegramLegacyOwnerIds.length>0 || telegramDmPolicyRaw.length>0;
-          const gatewayPort=trimEnv('OPENCLAW_GATEWAY_INTERNAL_PORT') || '18789';
-          const controlUiPort=trimEnv('OPENCLAW_CONTROL_UI_PORT') || '18791';
-          const normalizedOrigins=Array.isArray(controlUi.allowedOrigins)
-            ? controlUi.allowedOrigins.filter((origin)=>typeof origin==='string' && origin.trim().length>0)
-            : [];
-          const requiredOrigins=[
-            'http://localhost:'+gatewayPort,
-            'http://127.0.0.1:'+gatewayPort,
-            'http://localhost:'+controlUiPort,
-            'http://127.0.0.1:'+controlUiPort,
-          ];
-          for (const origin of requiredOrigins) {
-            if (!normalizedOrigins.includes(origin)) normalizedOrigins.push(origin);
-          }
-          controlUi.allowedOrigins=normalizedOrigins;
-          gateway.controlUi=controlUi;
-          gateway.mode='local';
-          if (gatewayToken.length>0) {
-            gateway.auth={
-              mode:'token',
-              token:{
-                source:'env',
-                provider:'default',
-                id:'OPENCLAW_GATEWAY_TOKEN',
-              },
+        }
+        config.gateway=gateway;
+
+        if (shouldBootstrapTelegram) {
+          const channels=(config.channels && typeof config.channels==='object' && !Array.isArray(config.channels)) ? config.channels : {};
+          const telegram=(channels.telegram && typeof channels.telegram==='object' && !Array.isArray(channels.telegram)) ? channels.telegram : {};
+          telegram.enabled=true;
+          if (telegramBotToken.length>0) {
+            telegram.botToken={
+              source:'env',
+              provider:'default',
+              id:'TELEGRAM_BOT_TOKEN',
             };
           }
-          config.gateway=gateway;
-
-          if (shouldBootstrapTelegram) {
-            const channels=(config.channels && typeof config.channels==='object' && !Array.isArray(config.channels)) ? config.channels : {};
-            const telegram=(channels.telegram && typeof channels.telegram==='object' && !Array.isArray(channels.telegram)) ? channels.telegram : {};
-            telegram.enabled=true;
-            if (telegramBotToken.length>0) {
-              telegram.botToken={
-                source:'env',
-                provider:'default',
-                id:'TELEGRAM_BOT_TOKEN',
-              };
-            }
-            if (telegramOwnerAllowFrom.length>0) {
-              commands.ownerAllowFrom=mergeUnique(commands.ownerAllowFrom, telegramOwnerAllowFrom);
-            }
-            if (telegramAllowFrom.length>0) {
-              telegram.allowFrom=mergeUnique(telegram.allowFrom, telegramAllowFrom);
-            }
-            telegram.dmPolicy=telegramDmPolicy;
-            channels.telegram=telegram;
-            config.channels=channels;
+          if (telegramOwnerAllowFrom.length>0) {
+            commands.ownerAllowFrom=mergeUnique(commands.ownerAllowFrom, telegramOwnerAllowFrom);
           }
-
-          config.commands=commands;
-
-          const tools=(config.tools && typeof config.tools==='object' && !Array.isArray(config.tools)) ? config.tools : {};
-          if (toolsProfile) {
-            tools.profile=toolsProfile;
+          if (telegramAllowFrom.length>0) {
+            telegram.allowFrom=mergeUnique(telegram.allowFrom, telegramAllowFrom);
           }
-          const fsTools=(tools.fs && typeof tools.fs==='object' && !Array.isArray(tools.fs)) ? tools.fs : {};
-          if (workspaceOnlyToggle !== null) {
-            fsTools.workspaceOnly=workspaceOnlyToggle;
-          }
-          if (Object.keys(fsTools).length>0) {
-            tools.fs=fsTools;
-          }
+          telegram.dmPolicy=telegramDmPolicy;
+          channels.telegram=telegram;
+          config.channels=channels;
+        }
 
-          const shouldManageDeny=[denyAutomation, denyRuntime, denyFs].some((value)=>value!==null);
-          if (shouldManageDeny) {
-            const desiredDenyGroups=[];
-            if (denyAutomation) desiredDenyGroups.push('group:automation');
-            if (denyRuntime) desiredDenyGroups.push('group:runtime');
-            if (denyFs) desiredDenyGroups.push('group:fs');
-            const existingDeny=Array.isArray(tools.deny) ? tools.deny : [];
-            const normalizedDeny=[];
-            for (const entry of existingDeny) {
-              const normalized=String(entry||'').trim();
-              if (!normalized || managedDenyGroups.has(normalized) || normalizedDeny.includes(normalized)) continue;
-              normalizedDeny.push(normalized);
-            }
-            for (const entry of desiredDenyGroups) {
-              if (!normalizedDeny.includes(entry)) normalizedDeny.push(entry);
-            }
-            tools.deny=normalizedDeny;
-          }
-          config.tools=tools;
+        config.commands=commands;
 
-          if (sandboxModeAll !== null) {
-            const agents=(config.agents && typeof config.agents==='object' && !Array.isArray(config.agents)) ? config.agents : {};
-            const defaults=(agents.defaults && typeof agents.defaults==='object' && !Array.isArray(agents.defaults)) ? agents.defaults : {};
-            const sandbox=(defaults.sandbox && typeof defaults.sandbox==='object' && !Array.isArray(defaults.sandbox)) ? defaults.sandbox : {};
-            if (sandboxModeAll) {
-              sandbox.mode='all';
-            } else if ('mode' in sandbox) {
-              delete sandbox.mode;
-            }
-            if (Object.keys(sandbox).length>0) {
-              defaults.sandbox=sandbox;
-            } else if ('sandbox' in defaults) {
-              delete defaults.sandbox;
-            }
-            if (Object.keys(defaults).length>0) {
-              agents.defaults=defaults;
-            } else if ('defaults' in agents) {
-              delete agents.defaults;
-            }
-            if (Object.keys(agents).length>0) {
-              config.agents=agents;
-            }
-          }
+        const tools=(config.tools && typeof config.tools==='object' && !Array.isArray(config.tools)) ? config.tools : {};
+        if (toolsProfile) {
+          tools.profile=toolsProfile;
+        }
+        const fsTools=(tools.fs && typeof tools.fs==='object' && !Array.isArray(tools.fs)) ? tools.fs : {};
+        if (workspaceOnlyToggle !== null) {
+          fsTools.workspaceOnly=workspaceOnlyToggle;
+        }
+        if (Object.keys(fsTools).length>0) {
+          tools.fs=fsTools;
+        }
 
-          fs.writeFileSync(configPath, JSON.stringify(config, null, 2)+'\n');
-        " &&
-        exec node dist/index.js gateway --bind "${OPENCLAW_GATEWAY_BIND:-lan}" --port "${OPENCLAW_GATEWAY_INTERNAL_PORT:-18789}"
+        const shouldManageDeny=[denyAutomation, denyRuntime, denyFs].some((value)=>value!==null);
+        if (shouldManageDeny) {
+          const desiredDenyGroups=[];
+          if (denyAutomation) desiredDenyGroups.push('group:automation');
+          if (denyRuntime) desiredDenyGroups.push('group:runtime');
+          if (denyFs) desiredDenyGroups.push('group:fs');
+          const existingDeny=Array.isArray(tools.deny) ? tools.deny : [];
+          const normalizedDeny=[];
+          for (const entry of existingDeny) {
+            const normalized=String(entry||'').trim();
+            if (!normalized || managedDenyGroups.has(normalized) || normalizedDeny.includes(normalized)) continue;
+            normalizedDeny.push(normalized);
+          }
+          for (const entry of desiredDenyGroups) {
+            if (!normalizedDeny.includes(entry)) normalizedDeny.push(entry);
+          }
+          tools.deny=normalizedDeny;
+        }
+        config.tools=tools;
+
+        const visibleRepliesRaw=trimEnv('OPENCLAW_MESSAGES_GROUPCHAT_VISIBLE_REPLIES');
+        const messages=(config.messages && typeof config.messages==='object' && !Array.isArray(config.messages)) ? config.messages : {};
+        const groupChat=(messages.groupChat && typeof messages.groupChat==='object' && !Array.isArray(messages.groupChat)) ? messages.groupChat : {};
+        const existingVisibleReplies=typeof groupChat.visibleReplies==='string' ? groupChat.visibleReplies.trim() : '';
+        if (visibleRepliesRaw.length>0) {
+          groupChat.visibleReplies=visibleRepliesRaw;
+          messages.groupChat=groupChat;
+          config.messages=messages;
+        } else if (existingVisibleReplies==='message_tool') {
+          groupChat.visibleReplies='automatic';
+          messages.groupChat=groupChat;
+          config.messages=messages;
+        }
+
+        if (sandboxModeAll !== null) {
+          const agents=(config.agents && typeof config.agents==='object' && !Array.isArray(config.agents)) ? config.agents : {};
+          const defaults=(agents.defaults && typeof agents.defaults==='object' && !Array.isArray(agents.defaults)) ? agents.defaults : {};
+          const sandbox=(defaults.sandbox && typeof defaults.sandbox==='object' && !Array.isArray(defaults.sandbox)) ? defaults.sandbox : {};
+          if (sandboxModeAll) {
+            sandbox.mode='all';
+          } else if ('mode' in sandbox) {
+            delete sandbox.mode;
+          }
+          if (Object.keys(sandbox).length>0) {
+            defaults.sandbox=sandbox;
+          } else if ('sandbox' in defaults) {
+            delete defaults.sandbox;
+          }
+          if (Object.keys(defaults).length>0) {
+            agents.defaults=defaults;
+          } else if ('defaults' in agents) {
+            delete agents.defaults;
+          }
+          if (Object.keys(agents).length>0) {
+            config.agents=agents;
+          }
+        }
+
+        fs.writeFileSync(configPath, JSON.stringify(config, null, 2)+'\n');
+        NODE
+
+        gid=${DOCKER_SOCKET_GID:-$(stat -c %g /var/run/docker.sock 2>/dev/null || true)}
+
+        if [ -n "$${gid}" ]; then
+          existing_group=$(getent group "$${gid}" | cut -d: -f1)
+          if [ -z "$${existing_group}" ]; then
+            groupadd -g "$${gid}" dockersock 2>/dev/null || true
+            existing_group=$(getent group "$${gid}" | cut -d: -f1)
+          fi
+          if [ -n "$${existing_group}" ]; then
+            usermod -aG "$${existing_group}" node 2>/dev/null || usermod -aG dockersock node || true
+          fi
+        fi
+
+        mkdir -p /home/node/.openclaw/credentials
+        chown -R node:node /home/node/.openclaw
+
+        su -s /bin/sh node -c "exec node dist/index.js gateway --bind '$${gateway_bind}' --port '$${gateway_port}'"
 
     healthcheck:
       test:
@@ -354,14 +391,14 @@ services:
   # Shares the gateway's network namespace and bind-mounts the same
   # openclaw-src tree, so it always runs the same code as the gateway.
   openclaw-cli:
-    image: node:24-bookworm
+    image: mc-openclaw:dockercli
     container_name: mc-openclaw-cli
     network_mode: "service:openclaw-gateway"
     init: true
     stdin_open: true
     tty: true
     working_dir: /app
-    user: "1000:1000"
+    user: root
     cap_drop:
       - NET_RAW
       - NET_ADMIN
@@ -379,6 +416,7 @@ services:
       TELEGRAM_DM_POLICY: ${TELEGRAM_DM_POLICY:-}
       TELEGRAM_ALLOW_FROM: ${TELEGRAM_ALLOW_FROM:-}
       TELEGRAM_OWNER_ALLOW_FROM: ${TELEGRAM_OWNER_ALLOW_FROM:-}
+      DOCKER_SOCKET_GID: ${DOCKER_SOCKET_GID:-}
       OPENCLAW_TOOLS_PROFILE: ${OPENCLAW_TOOLS_PROFILE:-coding}
       OPENCLAW_SECURITY_WORKSPACE_ONLY: ${OPENCLAW_SECURITY_WORKSPACE_ONLY:-1}
       OPENCLAW_SECURITY_DENY_AUTOMATION: ${OPENCLAW_SECURITY_DENY_AUTOMATION:-1}
@@ -390,6 +428,7 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENCLAW_MESSAGES_GROUPCHAT_VISIBLE_REPLIES: ${OPENCLAW_MESSAGES_GROUPCHAT_VISIBLE_REPLIES:-automatic}
 
     env_file:
       - path: .env
@@ -400,8 +439,35 @@ services:
     volumes:
       - ./openclaw-src:/app:rw
       - ./.openclaw-data:/home/node/.openclaw
+      - /var/run/docker.sock:/var/run/docker.sock:rw
 
-    entrypoint: ["node", "dist/index.js"]
+    entrypoint:
+      - "bash"
+      - "-lc"
+      - |
+        set -e
+        socket_gid="${DOCKER_SOCKET_GID:-}"
+        if [ -z "$$socket_gid" ] && [ -S /var/run/docker.sock ]; then
+          socket_gid=$(stat -c %g /var/run/docker.sock 2>/dev/null || true)
+        fi
+
+        if [ -n "$$socket_gid" ]; then
+          existing_group=$(getent group "$$socket_gid" | cut -d: -f1)
+          if [ -z "$$existing_group" ]; then
+            groupadd -g "$$socket_gid" dockersock 2>/dev/null || true
+            existing_group=$(getent group "$$socket_gid" | cut -d: -f1)
+          fi
+          if [ -n "$$existing_group" ]; then
+            usermod -aG "$$existing_group" node || usermod -aG dockersock node || true
+          fi
+        fi
+
+        mkdir -p /home/node/.openclaw/credentials
+        chown -R node:node /home/node/.openclaw
+
+        cmd_args=$(printf " %q" "$@")
+        su -s /bin/sh -m node -c "set -e; exec node dist/index.js$${cmd_args}"
+      - "openclaw-cli"
     depends_on:
       - openclaw-gateway
 
