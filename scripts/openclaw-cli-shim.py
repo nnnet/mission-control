@@ -51,6 +51,9 @@ from typing import List, Optional
 OPENCLAW_DIST = "/opt/openclaw-src/dist/index.js"
 
 VALID_TELEGRAM_DM_POLICIES = {"allowlist", "pairing", "open"}
+TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
+FALSY_ENV_VALUES = {"0", "false", "no", "off"}
+MANAGED_DENY_GROUPS = {"group:automation", "group:runtime", "group:fs"}
 
 
 def parse_csv_entries(raw: str) -> List[str]:
@@ -109,6 +112,78 @@ def merged_unique(existing: object, additions: List[str]) -> List[str]:
         merged.append(normalized)
 
     return merged
+
+
+def parse_env_toggle(name: str, default: bool) -> bool:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+
+    normalized = raw_value.strip().lower()
+    if not normalized:
+        return default
+    if normalized in TRUTHY_ENV_VALUES:
+        return True
+    if normalized in FALSY_ENV_VALUES:
+        return False
+    return default
+
+
+def project_security_defaults(config: dict) -> None:
+    tools = config.get("tools")
+    if not isinstance(tools, dict):
+        tools = {}
+
+    tools_profile = str(os.environ.get("OPENCLAW_TOOLS_PROFILE", "coding")).strip() or "coding"
+    tools["profile"] = tools_profile
+
+    fs_tools = tools.get("fs")
+    if not isinstance(fs_tools, dict):
+        fs_tools = {}
+    if parse_env_toggle("OPENCLAW_SECURITY_WORKSPACE_ONLY", default=True):
+        fs_tools["workspaceOnly"] = True
+    tools["fs"] = fs_tools
+
+    desired_deny_groups: List[str] = []
+    if parse_env_toggle("OPENCLAW_SECURITY_DENY_AUTOMATION", default=True):
+        desired_deny_groups.append("group:automation")
+    if parse_env_toggle("OPENCLAW_SECURITY_DENY_RUNTIME", default=True):
+        desired_deny_groups.append("group:runtime")
+    if parse_env_toggle("OPENCLAW_SECURITY_DENY_FS", default=False):
+        desired_deny_groups.append("group:fs")
+
+    existing_deny = tools.get("deny")
+    preserved_deny: List[str] = []
+    if isinstance(existing_deny, list):
+        for entry in existing_deny:
+            normalized = str(entry).strip()
+            if not normalized or normalized in MANAGED_DENY_GROUPS:
+                continue
+            if normalized not in preserved_deny:
+                preserved_deny.append(normalized)
+
+    tools["deny"] = merged_unique(preserved_deny, desired_deny_groups)
+    config["tools"] = tools
+
+    if not parse_env_toggle("OPENCLAW_SECURITY_SANDBOX_ALL", default=True):
+        return
+
+    agents = config.get("agents")
+    if not isinstance(agents, dict):
+        agents = {}
+
+    defaults = agents.get("defaults")
+    if not isinstance(defaults, dict):
+        defaults = {}
+
+    sandbox = defaults.get("sandbox")
+    if not isinstance(sandbox, dict):
+        sandbox = {}
+
+    sandbox["mode"] = "all"
+    defaults["sandbox"] = sandbox
+    agents["defaults"] = defaults
+    config["agents"] = agents
 
 
 def resolve_telegram_dm_policy(explicit_policy_raw: str, legacy_owner_ids: List[str]) -> str:
@@ -206,6 +281,7 @@ def ensure_openclaw_state_defaults() -> None:
         config["channels"] = channels
 
     config["commands"] = commands
+    project_security_defaults(config)
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n")
