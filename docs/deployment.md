@@ -83,6 +83,30 @@ make down && make up
 make openclaw-down && make openclaw-up
 ```
 
+### Make command matrix (prod vs dev vs updates)
+
+Use `.env` + `.env.openclaw` as the single source of truth for host/port/token values.
+
+| Workflow | Production stack (`docker-compose.yml`) | Dev stack (`docker-compose-dev.yml`) |
+|---|---|---|
+| Start | `make up` | `make dev-up` (or `make dev`) |
+| Restart | `make restart` | `make dev-restart` |
+| Stop | `make down` | `make dev-down` |
+| Status | `make status` | `make dev-ps` |
+| Update MC quickly | `make upgrade` | `make upgrade-dev` |
+
+OpenClaw lifecycle (shared across prod/dev MC modes):
+
+| Workflow | Command |
+|---|---|
+| Start OpenClaw stack | `make openclaw-up` |
+| Stop OpenClaw stack | `make openclaw-down` |
+| Restart gateway | `make openclaw-restart` |
+| Status | `make openclaw-status` |
+| Update OpenClaw source/build | `make openclaw-update` (alias: `make upgrade-openclaw`) |
+
+`make restart` and `make dev-restart` are mode-aware and will restart OpenClaw gateway automatically when it is already running, while preserving previous behavior when OpenClaw is down.
+
 Minimum `.env` / `.env.openclaw` keys for this flow:
 
 ```env

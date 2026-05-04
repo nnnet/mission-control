@@ -18,6 +18,7 @@ OPENCLAW_REPO := https://github.com/openclaw/openclaw.git
 OPENCLAW_REF  := main
 CONTAINER   := mission-control
 CONTAINER_DEV := mission-control-dev
+OPENCLAW_GATEWAY_CONTAINER := mc-openclaw-gateway
 MC_URL_SCHEME ?= http
 MC_HOST ?= 127.0.0.1
 MC_PORT ?= 7012
@@ -36,9 +37,9 @@ help:  ## List targets
 	      /^[a-zA-Z0-9_-]+:.*##/ { printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2 }' \
 	      $(MAKEFILE_LIST)
 
-# ── Compose lifecycle ──────────────────────────────────────────────────────
+# ── Prod lifecycle (docker-compose.yml) ───────────────────────────────────
 .PHONY: up
-up:  ## Bring stack up and wait for /login to respond
+up:  ## [prod] Bring stack up and wait for /login
 	@cd $(PROJECT_DIR)
 	$(COMPOSE) up -d $(ARGS)
 	@$(MAKE) --no-print-directory wait-ready
@@ -50,51 +51,74 @@ up:  ## Bring stack up and wait for /login to respond
 	@echo "  /agents   — agent registry"
 
 .PHONY: down
-down:  ## Stop and remove container + network (volumes preserved)
+down:  ## [prod] Stop stack (volumes preserved)
 	@cd $(PROJECT_DIR)
 	$(COMPOSE) down
 
 .PHONY: restart
-restart:  ## Restart the running container
+restart:  ## [prod] Restart MC (+ OpenClaw gateway if currently running)
 	@cd $(PROJECT_DIR)
 	$(COMPOSE) restart
+	@$(MAKE) --no-print-directory openclaw-restart-if-running
 	@$(MAKE) --no-print-directory wait-ready
 
 .PHONY: recreate
-recreate:  ## Force recreate the container (apply compose changes)
+recreate:  ## [prod] Force recreate container (apply compose changes)
 	@$(MAKE) --no-print-directory up ARGS="--force-recreate"
 
 .PHONY: build
-build:  ## Build/refresh the mission-control image
+build:  ## [prod] Build/refresh Mission Control image
 	@cd $(PROJECT_DIR)
 	$(COMPOSE) build $(ARGS)
 
 .PHONY: rebuild
-rebuild:  ## Rebuild image (no cache) and recreate
+rebuild:  ## [prod] Rebuild image (no cache) and recreate
 	@cd $(PROJECT_DIR)
 	$(COMPOSE) build --no-cache
 	@$(MAKE) --no-print-directory recreate
 
 .PHONY: ps
-ps:  ## Show container status
+ps:  ## [prod] Show container status
 	@cd $(PROJECT_DIR)
 	$(COMPOSE) ps
 
 .PHONY: logs
-logs:  ## Tail server logs (Ctrl+C to stop)
+logs:  ## [prod] Tail server logs (Ctrl+C to stop)
 	@cd $(PROJECT_DIR)
 	$(COMPOSE) logs -f --tail=200
 
 .PHONY: shell
-shell:  ## Open an interactive shell inside the container
+shell:  ## [prod] Open interactive shell in container
 	docker exec -it $(CONTAINER) bash || docker exec -it $(CONTAINER) sh
 
 .PHONY: status
-status:  ## One-liner health: HTTP code + which agent CLIs are reachable
+status:  ## [prod] One-line health + CLI reachability
 	@printf "URL:     "; curl -sS -o /dev/null -L -w "%{http_code} → %{url_effective}\n" $(URL) || true
 	@printf "claude:  "; docker exec $(CONTAINER) sh -c 'which claude && claude --version' 2>&1 | tail -1
 	@printf "codex:   "; docker exec $(CONTAINER) sh -c 'which codex && codex --version 2>&1 | tail -1' 2>&1 | tail -1
 	@printf "gemini:  "; docker exec $(CONTAINER) sh -c 'which gemini' 2>&1 | tail -1
+
+# ── Update workflows ───────────────────────────────────────────────────────
+.PHONY: repo-update
+repo-update:  ## [shared] Fast-forward current git branch from origin
+	@cd $(PROJECT_DIR)
+	@branch=$$(git rev-parse --abbrev-ref HEAD); \
+	  echo "==> fetching origin/$$branch"; \
+	  git fetch origin "$$branch"; \
+	  git merge --ff-only "origin/$$branch"
+
+.PHONY: upgrade
+upgrade: repo-update  ## [prod] Pull latest source, build --pull, restart
+	@$(MAKE) --no-print-directory build ARGS="--pull"
+	@$(MAKE) --no-print-directory restart
+
+.PHONY: upgrade-dev
+upgrade-dev: repo-update  ## [dev] Pull latest source, build --pull, restart
+	@$(MAKE) --no-print-directory dev-build ARGS="--pull"
+	@$(MAKE) --no-print-directory dev-restart
+
+.PHONY: upgrade-openclaw
+upgrade-openclaw: openclaw-update  ## [openclaw] Alias for openclaw-update
 
 # ── Lifecycle utilities ────────────────────────────────────────────────────
 .PHONY: wait-ready
@@ -125,9 +149,9 @@ reset-db:  ## Wipe SQLite db (forces /setup again — admin password recovery)
 	@echo "Open $(URL)/setup to create a fresh admin."
 
 # ── Bookkeeping ────────────────────────────────────────────────────────────
-# ── Dev mode (hot-reload, source bind-mounted) ─────────────────────────────
-.PHONY: dev
-dev:  ## Bring up dev stack (pnpm dev, hot-reload from bind-mounted src/)
+# ── Dev lifecycle (docker-compose-dev.yml) ─────────────────────────────────
+.PHONY: dev-up
+dev-up:  ## [dev] Bring stack up and wait for /login
 	@cd $(PROJECT_DIR)
 	$(COMPOSE_DEV) up -d $(ARGS)
 	@$(MAKE) --no-print-directory wait-ready
@@ -137,34 +161,44 @@ dev:  ## Bring up dev stack (pnpm dev, hot-reload from bind-mounted src/)
 	@echo "  Rebuild image only when package.json or Dockerfile.dev changes:"
 	@echo "    make dev-build"
 
+.PHONY: dev
+dev: dev-up  ## [dev] Alias for dev-up
+
 .PHONY: dev-down
-dev-down:  ## Stop dev stack (volumes preserved)
+dev-down:  ## [dev] Stop stack (volumes preserved)
 	@cd $(PROJECT_DIR)
 	$(COMPOSE_DEV) down
 
+.PHONY: dev-restart
+dev-restart:  ## [dev] Restart MC dev (+ OpenClaw gateway if currently running)
+	@cd $(PROJECT_DIR)
+	$(COMPOSE_DEV) restart
+	@$(MAKE) --no-print-directory openclaw-restart-if-running
+	@$(MAKE) --no-print-directory wait-ready
+
 .PHONY: dev-build
-dev-build:  ## Rebuild dev image (run when package.json / Dockerfile.dev change)
+dev-build:  ## [dev] Rebuild image (when package.json / Dockerfile.dev changes)
 	@cd $(PROJECT_DIR)
 	$(COMPOSE_DEV) build $(ARGS)
 
 .PHONY: dev-rebuild
-dev-rebuild:  ## Rebuild dev image (no cache) and recreate
+dev-rebuild:  ## [dev] Rebuild image (no cache) and recreate
 	@cd $(PROJECT_DIR)
 	$(COMPOSE_DEV) build --no-cache
 	$(COMPOSE_DEV) up -d --force-recreate
 	@$(MAKE) --no-print-directory wait-ready
 
 .PHONY: dev-logs
-dev-logs:  ## Tail dev container logs (Ctrl+C to stop)
+dev-logs:  ## [dev] Tail container logs (Ctrl+C to stop)
 	@cd $(PROJECT_DIR)
 	$(COMPOSE_DEV) logs -f --tail=200
 
 .PHONY: dev-shell
-dev-shell:  ## Open shell inside dev container
+dev-shell:  ## [dev] Open shell inside container
 	docker exec -it $(CONTAINER_DEV) bash || docker exec -it $(CONTAINER_DEV) sh
 
 .PHONY: dev-ps
-dev-ps:  ## Show dev container status
+dev-ps:  ## [dev] Show container status
 	@cd $(PROJECT_DIR)
 	$(COMPOSE_DEV) ps
 
@@ -195,7 +229,7 @@ openclaw-build: openclaw-clone  ## Build openclaw dist into ./openclaw-src/ (5-1
 	@echo "Run 'make openclaw-up' to start the gateway."
 
 .PHONY: openclaw-update
-openclaw-update: openclaw-clone openclaw-build openclaw-restart  ## git pull openclaw-src + rebuild dist + restart gateway (no docker rebuild)
+openclaw-update: openclaw-clone openclaw-build openclaw-restart  ## [openclaw] Pull source + rebuild dist + restart gateway
 	@echo "==> openclaw updated to $$(cd $(OPENCLAW_SRC) && git rev-parse --short HEAD); gateway restarted."
 
 .PHONY: openclaw-up
@@ -221,6 +255,16 @@ openclaw-down:  ## Stop openclaw stack (gateway + control UI)
 openclaw-restart:  ## Restart openclaw gateway
 	@cd $(PROJECT_DIR)
 	$(COMPOSE_OC) restart openclaw-gateway
+
+.PHONY: openclaw-restart-if-running
+openclaw-restart-if-running:
+	@cd $(PROJECT_DIR)
+	@if docker ps --format '{{.Names}}' | grep -q '^$(OPENCLAW_GATEWAY_CONTAINER)$$'; then \
+	  echo "OpenClaw gateway detected; restarting for fresh linkage..."; \
+	  $(COMPOSE_OC) restart openclaw-gateway; \
+	else \
+	  echo "OpenClaw gateway not running; skipping gateway restart."; \
+	fi
 
 .PHONY: openclaw-logs
 openclaw-logs:  ## Tail openclaw gateway logs

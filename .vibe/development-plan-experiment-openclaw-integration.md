@@ -22,6 +22,8 @@
 - Added explicit credential-dir bootstrap for both state roots (`.openclaw-data/credentials` and `.mc-openclaw/credentials`) to remove OAuth-dir absence noise.
 - Added separate OpenClaw Control UI container (`mc-openclaw-control-ui`) serving `openclaw-src/dist/control-ui` on dedicated host port `OPENCLAW_CONTROL_UI_PORT` (default `18791`).
 - Added local-only Control UI device auto-approval sidecar (`mc-openclaw-control-ui-autopair`) that watches pending pair requests and auto-approves only local Docker Control UI requests (`clientId=openclaw-control-ui`, private/loopback IP, `gateway.mode=local`).
+- Standardized Make lifecycle naming by mode: prod uses `up/down/restart`; dev uses `dev-up/dev-down/dev-restart` with `dev` as alias to `dev-up`.
+- Added explicit update workflows for fast-moving MC/OpenClaw versions (`upgrade`, `upgrade-dev`, `openclaw-update`, `upgrade-openclaw`) and mode-specific help text.
 
 ## Notes
 *Additional context and observations*
@@ -29,6 +31,7 @@
 - Reproduce run (Docker dev): `make dev` started MC at http://127.0.0.1:7012/login (200). `make openclaw-up` started gateway on 18789 (healthy).
 - `make openclaw-pair-mc` initial verify failed (GatewayTransportError: ws closed 1006 to ws://host.docker.internal:18789). After ~30s, retry succeeded (`{"ok": true ...}`) and pairing already present (idempotent). Agents update count 0.
 - `make status` failed because it expects container `mission-control` (prod); dev stack uses `mission-control-dev`. Use `make dev-ps` + `make openclaw-ps` for dev status.
+- `bd ready --json` remains blocked in this environment: `database "mission_control" not found on Dolt server at 127.0.0.1:13870`.
 - Prod container starts successfully but `make up` can fail `wait-ready` (30s) even when Next.js is ready; logs show server ready and migrations applied.
 - OpenClaw gateway logs show `gateway.auth.token` surface inactive warning even with token env var configured.
 - `bd doctor --fix` requires `--yes` for non-interactive; database still not reachable (dolt server missing `mission_control` db on 127.0.0.1:13870), so bd tasks cannot be created yet.
@@ -127,6 +130,12 @@
 - `Makefile`
   - `openclaw-up` starts `openclaw-gateway` + `openclaw-control-ui` reverse proxy.
   - Status text updated to reflect the dedicated Control UI service.
+- `Makefile`
+  - Added mode-explicit lifecycle targets and help labels for prod vs dev (`up/restart` vs `dev-up/dev-restart/dev-down`).
+  - `restart` and `dev-restart` now conditionally restart OpenClaw gateway when `mc-openclaw-gateway` is active.
+  - Added safe update targets: `repo-update` (git fast-forward), `upgrade` (prod), `upgrade-dev` (dev), `upgrade-openclaw` alias.
+- `docs/deployment.md`
+  - Added a command matrix for prod/dev lifecycle and update workflows, plus shared OpenClaw update commands.
 
 - `docker-compose.yml`
   - Added OpenClaw gateway runtime env vars for production container (`OPENCLAW_GATEWAY_URL`, token, insecure-private-ws flag, explicit `OPENCLAW_STATE_DIR`).
@@ -321,6 +330,22 @@
       - `channels.telegram.allowFrom` includes `${TELEGRAM_NUMERIC_USER_ID}`.
       - `channels.telegram.dmPolicy` is `allowlist`.
       - `channels.telegram.botToken.id` resolves to `TELEGRAM_BOT_TOKEN`.
+
+13. Make workflow normalization verification (2026-05-04)
+    - `bd ready --json`
+      - Failed (environment issue): `database "mission_control" not found on Dolt server at 127.0.0.1:13870`.
+    - `make help`
+      - Shows explicit prod/dev/update targets including `dev-up`, `dev-restart`, `upgrade`, `upgrade-dev`, `upgrade-openclaw`.
+    - `make status`
+      - Returned HTTP `200` for `http://127.0.0.1:7012/login` and CLI reachability (`claude`, `codex`, `gemini`).
+    - `make dev-ps`
+      - Returned compose service status for the development stack.
+    - `make openclaw-status`
+      - Returned `Gateway HTTP: 200`, `Control UI: 200`, `MC->Gateway: OK`.
+    - `make restart`
+      - Restarted prod Mission Control and conditionally restarted `mc-openclaw-gateway`; readiness probe returned 200.
+    - `make down && make dev-up && make dev-restart`
+      - Switched to dev stack, then verified dev restart path and conditional gateway restart; readiness probe returned 200.
 
 ## Finalize
 <!-- beads-phase-id: TBD -->
