@@ -109,8 +109,31 @@ Primary operator commands:
 | Restart selected mode (+ OpenClaw when enabled) | `make restart` |
 | Stop selected mode (+ OpenClaw when enabled) | `make down` |
 | Mode + endpoint health summary | `make status` |
+| Refresh source/state only (no forced rebuild) | `make update` |
+| Force no-cache MC image rebuild + recreate | `make rebuild` |
+| Full maintenance (`update` + `rebuild` + `restart`) | `make upgrade` |
 
-Compatibility aliases still exist (`make dev-up`, `make dev-restart`, `make dev-down`, `make dev-ps`) but are no longer required for day-to-day operation.
+Mode override examples:
+
+```bash
+MC_MODE=prod OPENCLAW_ENABLED=1 make upgrade
+MC_MODE=dev OPENCLAW_ENABLED=0 make rebuild
+```
+
+### `update` vs `upgrade`
+
+- `make update`
+  - Fast-forwards the current Mission Control branch from origin.
+  - If `OPENCLAW_ENABLED=1`, also refreshes OpenClaw source state.
+  - Does **not** force an MC image rebuild and does **not** force restart.
+
+- `make upgrade`
+  - Runs `make update`.
+  - Runs `make rebuild` (no-cache MC build + recreate selected mode).
+  - Runs `make restart`.
+  - If `OPENCLAW_ENABLED=1`, also runs OpenClaw update path (`make openclaw-update`: source refresh + dist rebuild + gateway restart).
+
+Compatibility aliases still exist (`make dev-up`, `make dev-restart`, `make dev-down`, `make dev-ps`, `make update-dev`, `make upgrade-dev`) but are optional.
 
 Minimum `.env` / `.env.openclaw` keys for this flow:
 

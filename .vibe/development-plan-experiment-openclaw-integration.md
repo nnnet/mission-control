@@ -215,6 +215,14 @@
   - Added explicit Make+Compose runtime keys and Telegram/OpenClaw keys required for env-driven startup.
 - `docs/deployment.md` / `docs/openclaw-telegram-onboarding.md`
   - Added concise “what to set in .env” operator blocks for Make-first startup and Telegram ownership bootstrap.
+- `Makefile`
+  - Extended unified, env-driven top-level maintenance commands to include `update`, `rebuild`, and `upgrade` under `MC_MODE=prod|dev` + `OPENCLAW_ENABLED=0|1`.
+  - `update` now performs source/state refresh without forced rebuild; `upgrade` now executes `update + rebuild + restart` and invokes OpenClaw update path when enabled.
+  - Preserved compatibility aliases with added `update-dev` alias for mode-specific workflows.
+  - Simplified `make help` to show only recommended top-level commands (`up/restart/down/status/update/rebuild/upgrade`) plus `help-all`.
+- `docs/ops-cheatsheet.md` / `docs/deployment.md`
+  - Added concise mode-aware command matrix for lifecycle + maintenance commands.
+  - Added explicit `update` vs `upgrade` semantics and aligned examples with current Makefile behavior.
 
 ## Verify
 <!-- beads-phase-id: TBD -->
@@ -369,6 +377,20 @@
       - Reported `Mode: dev`, `mission-control-dev` container checks, and OpenClaw endpoint health.
     - `MC_MODE=dev OPENCLAW_ENABLED=1 make restart`
       - Restarted dev Mission Control and OpenClaw (restart-or-up behavior).
+
+15. Unified maintenance targets verification (2026-05-04)
+    - `make help`
+      - Shows minimal recommended top-level commands including `update`, `rebuild`, and `upgrade`.
+    - Dry-safe command paths (`-n`) for both modes:
+      - `MC_MODE=prod OPENCLAW_ENABLED=0 make -n update`
+      - `MC_MODE=prod OPENCLAW_ENABLED=0 make -n rebuild`
+      - `MC_MODE=prod OPENCLAW_ENABLED=0 make -n upgrade`
+      - `MC_MODE=dev OPENCLAW_ENABLED=1 make -n update`
+      - `MC_MODE=dev OPENCLAW_ENABLED=1 make -n rebuild`
+      - `MC_MODE=dev OPENCLAW_ENABLED=1 make -n upgrade`
+      - Note: GNU Make executes recursive `$(MAKE)` lines even under `-n`; the rebuild path attempted a real Docker build and surfaced an existing lockfile drift issue (`ERR_PNPM_OUTDATED_LOCKFILE`) unrelated to this Makefile/docs change.
+    - `make status`
+      - Returned mode-aware Mission Control endpoint status and OpenClaw endpoint checks when enabled.
 
 ## Finalize
 <!-- beads-phase-id: TBD -->

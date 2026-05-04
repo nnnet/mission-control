@@ -16,18 +16,55 @@ make up
 make restart
 make down
 make status
+make update
+make rebuild
+make upgrade
 ```
 
-## 3) Compatibility aliases (optional)
+## 3) Command matrix (prod/dev via `MC_MODE`)
+
+| Intent | Command |
+|---|---|
+| Start selected mode (+ OpenClaw when enabled) | `make up` |
+| Restart selected mode (+ OpenClaw when enabled) | `make restart` |
+| Stop selected mode (+ OpenClaw when enabled) | `make down` |
+| Health/status for selected mode | `make status` |
+| Refresh git/source state only | `make update` |
+| Force no-cache image rebuild + recreate selected mode | `make rebuild` |
+| Full maintenance flow | `make upgrade` |
+
+Mode override examples:
+
+```bash
+MC_MODE=prod OPENCLAW_ENABLED=1 make upgrade
+MC_MODE=dev  OPENCLAW_ENABLED=0 make rebuild
+```
+
+## 4) `update` vs `upgrade`
+
+- `make update` = **source/state refresh only**
+  - Fast-forward current branch from origin
+  - Refresh OpenClaw source when `OPENCLAW_ENABLED=1`
+  - **No forced MC image rebuild** and **no forced restart**
+
+- `make upgrade` = **`update` + `rebuild` + `restart`**
+  - Runs `make update`
+  - Runs `make rebuild` (no-cache MC image rebuild + recreate)
+  - Runs `make restart`
+  - When `OPENCLAW_ENABLED=1`, also runs OpenClaw update path (`make openclaw-update`: source refresh + dist rebuild + gateway restart)
+
+## 5) Compatibility aliases (optional)
 
 ```bash
 make dev-up
 make dev-restart
 make dev-down
 make dev-ps
+make update-dev
+make upgrade-dev
 ```
 
-## 4) OpenClaw lifecycle (direct commands)
+## 6) OpenClaw lifecycle (direct commands)
 
 ```bash
 make openclaw-up
@@ -36,15 +73,7 @@ make openclaw-down
 make openclaw-status
 ```
 
-## 5) Upgrade flows
-
-```bash
-make upgrade
-make upgrade-dev
-make upgrade-openclaw
-```
-
-## 5) Quick health check URLs
+## 7) Quick health check URLs
 
 ```text
 Mission Control base:   http://127.0.0.1:7012

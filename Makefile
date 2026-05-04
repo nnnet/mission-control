@@ -61,12 +61,15 @@ help:  ## Show minimal day-to-day commands
 	@printf "Set defaults in .env:\n"
 	@printf "  MC_MODE=prod|dev\n"
 	@printf "  OPENCLAW_ENABLED=1|0\n\n"
-	@printf "Primary commands:\n"
+	@printf "Recommended commands:\n"
 	@printf "  %-20s %s\n" "make up" "Start selected MC stack (+ OpenClaw when enabled)"
 	@printf "  %-20s %s\n" "make restart" "Restart selected MC stack (+ OpenClaw when enabled)"
 	@printf "  %-20s %s\n" "make down" "Stop selected MC stack (+ OpenClaw when enabled)"
 	@printf "  %-20s %s\n" "make status" "Show mode-aware health and endpoint status"
-	@printf "\nAdvanced commands:\n"
+	@printf "  %-20s %s\n" "make update" "Refresh source/state only (no forced rebuild)"
+	@printf "  %-20s %s\n" "make rebuild" "Force no-cache image rebuild + recreate selected mode"
+	@printf "  %-20s %s\n" "make upgrade" "update + rebuild + restart (+ OpenClaw upgrade when enabled)"
+	@printf "\nAdvanced:\n"
 	@printf "  %-20s %s\n" "make help-all" "List all available targets"
 
 .PHONY: help-all
@@ -192,10 +195,30 @@ repo-update:  ## [shared] Fast-forward current git branch from origin
 	  git fetch origin "$$branch"; \
 	  git merge --ff-only "origin/$$branch"
 
+.PHONY: openclaw-source-update
+openclaw-source-update: openclaw-clone  ## [openclaw] Refresh openclaw source only (no build/restart)
+	@echo "==> openclaw source refreshed (no rebuild/restart)"
+
+.PHONY: update
+update: repo-update  ## Refresh source/state only (no forced rebuild)
+	@if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
+	  $(MAKE) --no-print-directory openclaw-source-update; \
+	else \
+	  echo "OpenClaw disabled (OPENCLAW_ENABLED=0): skipping openclaw source refresh"; \
+	fi
+
 .PHONY: upgrade
-upgrade: repo-update  ## Pull latest source, build --pull, restart selected mode
-	@$(MAKE) --no-print-directory build ARGS="--pull"
+upgrade:  ## update + rebuild + restart (+ OpenClaw update path when enabled)
+	@$(MAKE) --no-print-directory update
+	@$(MAKE) --no-print-directory rebuild
 	@$(MAKE) --no-print-directory restart
+	@if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
+	  $(MAKE) --no-print-directory openclaw-update; \
+	fi
+
+.PHONY: update-dev
+update-dev:  ## [compat] Alias for mode-aware dev update
+	@$(MAKE) --no-print-directory update MC_MODE=dev
 
 .PHONY: upgrade-dev
 upgrade-dev:  ## [compat] Alias for mode-aware dev upgrade
