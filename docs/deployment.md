@@ -232,6 +232,11 @@ SQLite database is stored in `/app/.data/` inside the container. Mount a volume 
 docker run -v /path/to/data:/app/.data ...
 ```
 
+### Automatic backups
+
+- Set `MC_AUTO_BACKUP=1` (accepts `1`/`true`/`yes`/`on`) in your `.env` to enable automatic daily backups without toggling it in the UI.
+- The backup directory is created automatically when scheduled backups run, so the backup warning clears once the task executes.
+
 ### Self-contained Operator Setup (Linux host with existing Claude Code / Codex CLIs)
 
 For an operator running MC on a Linux/Docker host who already has authenticated
@@ -338,6 +343,10 @@ See `.env.example` for the full list. Key variables:
 | `LOCAL_LLM_API_KEY` | No | - | Bearer token sent to `LOCAL_LLM_ENDPOINT`. Only needed for proxies that require auth (e.g. liteLLM with master key). |
 | `MC_HOST_SESSION_MODE` | No | `coexist` | Policy when MC `--resumes` a host Claude Code session that may have a live CLI attached. One of `coexist`, `block-active`, `nudge`. |
 | `NEXT_PUBLIC_CHAT_POLL_INTERVAL_MS` | No | `1500` (code) / `1000` (docker-compose) | `/chat` transcript poll cadence (ms) when the SSE channel drops. **Baked at build time**, so changing it requires `make rebuild`. |
+
+> **Sandbox runtime requirement**
+> 
+> Enabling sandbox mode via `OPENCLAW_SECURITY_SANDBOX_ALL=1` requires Docker access. Ensure the `mc-openclaw-gateway` service bind-mounts the host Docker socket (`/var/run/docker.sock`) as shown in `docker-compose-openclaw.yml`.
 
 > **Note — `OPENCLAW_HOME` vs `OPENCLAW_STATE_DIR`**
 >

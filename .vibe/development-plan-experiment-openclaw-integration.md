@@ -29,6 +29,7 @@
 ## Notes
 *Additional context and observations*
 - bd database unavailable: `bd ready` fails (Dolt server says database "mission_control" not found on 127.0.0.1:13870). Need bd/Dolt server fix before creating Reproduce tasks.
+- Auto-backup default now honors `MC_AUTO_BACKUP` env (e.g., `1/true/yes/on`) so scheduled backups can be enabled without UI toggle; verified via node env readback of the default value.
 - Reproduce run (Docker dev): `make dev` started MC at http://127.0.0.1:7012/login (200). `make openclaw-up` started gateway on 18789 (healthy).
 - `make openclaw-pair-mc` initial verify failed (GatewayTransportError: ws closed 1006 to ws://host.docker.internal:18789). After ~30s, retry succeeded (`{"ok": true ...}`) and pairing already present (idempotent). Agents update count 0.
 - `make status` failed because it expects container `mission-control` (prod); dev stack uses `mission-control-dev`. Use `make dev-ps` + `make openclaw-ps` for dev status.
