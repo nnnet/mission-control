@@ -228,11 +228,12 @@
   - Removed legacy dev-specific target surface (`dev-up/dev-down/dev-restart/dev-ps/dev-*`, `update-dev`, `upgrade-dev`) from command interface.
   - Added one-shot mode override flags (`--dev`, `--prod`) with precedence over `.env` `MC_MODE`, exposed via `EFFECTIVE_MC_MODE`.
   - Added no-op selector/mode pseudo-targets so scoped invocations avoid unknown-target errors.
-  - Fixed restart hang path: default `make restart` (`all` scope) now uses `openclaw-restart-if-running` instead of `openclaw-restart-or-up`, preventing implicit OpenClaw cold-start/build during generic restarts.
+  - Finalized strict deterministic restart semantics: `make restart [scope]` is now an explicit composition of `make down [scope]` then `make up [scope]` with the same env/flag-resolved mode and scope.
+  - Removed runtime-state restart branching helpers from primary path (`openclaw-restart-or-up`, `openclaw-restart-if-running`) to eliminate ambiguity.
   - Hardened `wait-ready` probe with curl connect/request timeouts to avoid long network stalls being perceived as hangs.
 - `docs/ops-cheatsheet.md` / `docs/deployment.md`
   - Updated docs to include universal command grammar, scope examples (`make status openclaw`), and mode-flag examples (`make up --dev`, `make restart mc --prod`) with executable GNU Make form (`make -- ...`).
-  - Added restart nuance note: default `make restart` only restarts already-running OpenClaw; explicit OpenClaw startup uses `make restart openclaw` or `make up openclaw`.
+  - Updated restart semantics note to deterministic down→up behavior for all scopes, with OpenClaw inclusion driven only by scope + `OPENCLAW_ENABLED`.
 
 ## Verify
 <!-- beads-phase-id: TBD -->
@@ -417,19 +418,19 @@
     - `make status`
       - Returned mode-aware Mission Control endpoint status and OpenClaw endpoint checks when enabled.
 
-16. Restart hang fix verification (2026-05-04)
-    - `make up`
-      - Completed successfully.
+16. Deterministic restart semantics verification (2026-05-04)
     - `make restart`
-      - Completed successfully; MC restarted and OpenClaw restart step now skips cold-start when gateway is not running.
-    - `make status`
-      - Completed successfully.
-    - `make -- restart --dev`
-      - Completed successfully with CLI mode override.
+      - Completed successfully with explicit down→up sequence for default `all` scope:
+        - OpenClaw down (`openclaw stopped; ...`) then MC down
+        - MC up (`✓ http://127.0.0.1:7012 → 200`) then OpenClaw up
     - `make restart mc`
-      - Completed successfully (MC-only restart).
+      - Completed successfully with MC-only down→up sequence (stop dev container/network, recreate, readiness 200).
     - `make restart openclaw`
-      - Completed successfully (explicit OpenClaw restart-or-up path).
+      - Completed successfully with OpenClaw-only down→up sequence (compose down, then gateway/control-ui/autopair up).
+    - `make -- restart --dev`
+      - Completed successfully; same deterministic down→up behavior with CLI mode override (`--dev`) taking precedence.
+    - `make status`
+      - Completed successfully after restart checks (`Mode: dev`, `MC URL: 200`, `Gateway HTTP: 200`, `Control UI: 200`, `MC->Gateway: OK`).
 
 ## Finalize
 <!-- beads-phase-id: TBD -->

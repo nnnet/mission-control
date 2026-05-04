@@ -21,7 +21,6 @@ MC_MODE_DEFAULT := $(MC_MODE)
 OPENCLAW_ENABLED ?= 1
 CONTAINER   := mission-control
 CONTAINER_DEV := mission-control-dev
-OPENCLAW_GATEWAY_CONTAINER := mc-openclaw-gateway
 MC_URL_SCHEME ?= http
 MC_HOST ?= 127.0.0.1
 MC_PORT ?= 7012
@@ -97,7 +96,7 @@ help:  ## Show minimal day-to-day commands
 	@printf "  %-20s %s\n\n" "make -- <verb> [scope] [--dev|--prod]" "mode flags override MC_MODE for this run"
 	@printf "Recommended commands:\n"
 	@printf "  %-20s %s\n" "make up" "Start stack for scope (all respects OPENCLAW_ENABLED)"
-	@printf "  %-20s %s\n" "make restart" "Restart stack for scope"
+	@printf "  %-20s %s\n" "make restart" "Deterministic stop+start for scope"
 	@printf "  %-20s %s\n" "make down" "Stop stack for scope"
 	@printf "  %-20s %s\n" "make status" "Show health for scope"
 	@printf "  %-20s %s\n" "make update" "Refresh source/state only (no forced rebuild)"
@@ -185,31 +184,10 @@ mc-restart:
 	$(MC_COMPOSE) restart
 	@$(MAKE_SUB) wait-ready
 
-.PHONY: openclaw-restart-or-up
-openclaw-restart-or-up:
-	@cd $(PROJECT_DIR)
-	@if docker ps --format '{{.Names}}' | grep -q '^$(OPENCLAW_GATEWAY_CONTAINER)$$'; then \
-	  $(MAKE_SUB) openclaw-restart; \
-	else \
-	  $(MAKE_SUB) openclaw-up; \
-	fi
-
 .PHONY: restart
-restart:  ## Restart selected mode (+ OpenClaw when enabled)
-	@case "$(TARGET_SCOPE)" in \
-	  mc) \
-	    $(MAKE_SUB) mc-restart; \
-	    ;; \
-	  openclaw) \
-	    $(MAKE_SUB) openclaw-restart-or-up; \
-	    ;; \
-	  all) \
-	    $(MAKE_SUB) mc-restart; \
-	    if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
-	      $(MAKE_SUB) openclaw-restart-if-running; \
-	    fi; \
-	    ;; \
-	esac
+restart:  ## Deterministic restart: down then up for selected scope
+	@$(MAKE_SUB) down TARGET_SCOPE=$(TARGET_SCOPE)
+	@$(MAKE_SUB) up TARGET_SCOPE=$(TARGET_SCOPE)
 
 .PHONY: recreate
 recreate:  ## Force recreate selected mode container
@@ -443,16 +421,6 @@ openclaw-down:  ## Stop openclaw stack (gateway + control UI)
 openclaw-restart:  ## Restart openclaw gateway
 	@cd $(PROJECT_DIR)
 	$(COMPOSE_OC) restart openclaw-gateway
-
-.PHONY: openclaw-restart-if-running
-openclaw-restart-if-running:
-	@cd $(PROJECT_DIR)
-	@if docker ps --format '{{.Names}}' | grep -q '^$(OPENCLAW_GATEWAY_CONTAINER)$$'; then \
-	  echo "OpenClaw gateway detected; restarting for fresh linkage..."; \
-	  $(COMPOSE_OC) restart openclaw-gateway; \
-	else \
-	  echo "OpenClaw gateway not running; skipping gateway restart."; \
-	fi
 
 .PHONY: openclaw-logs
 openclaw-logs:  ## Tail openclaw gateway logs
