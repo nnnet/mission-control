@@ -228,8 +228,11 @@
   - Removed legacy dev-specific target surface (`dev-up/dev-down/dev-restart/dev-ps/dev-*`, `update-dev`, `upgrade-dev`) from command interface.
   - Added one-shot mode override flags (`--dev`, `--prod`) with precedence over `.env` `MC_MODE`, exposed via `EFFECTIVE_MC_MODE`.
   - Added no-op selector/mode pseudo-targets so scoped invocations avoid unknown-target errors.
+  - Fixed restart hang path: default `make restart` (`all` scope) now uses `openclaw-restart-if-running` instead of `openclaw-restart-or-up`, preventing implicit OpenClaw cold-start/build during generic restarts.
+  - Hardened `wait-ready` probe with curl connect/request timeouts to avoid long network stalls being perceived as hangs.
 - `docs/ops-cheatsheet.md` / `docs/deployment.md`
   - Updated docs to include universal command grammar, scope examples (`make status openclaw`), and mode-flag examples (`make up --dev`, `make restart mc --prod`) with executable GNU Make form (`make -- ...`).
+  - Added restart nuance note: default `make restart` only restarts already-running OpenClaw; explicit OpenClaw startup uses `make restart openclaw` or `make up openclaw`.
 
 ## Verify
 <!-- beads-phase-id: TBD -->
@@ -413,6 +416,20 @@
       - Note: GNU Make executes recursive `$(MAKE)` lines even under `-n`; the rebuild path attempted a real Docker build and surfaced an existing lockfile drift issue (`ERR_PNPM_OUTDATED_LOCKFILE`) unrelated to this Makefile/docs change.
     - `make status`
       - Returned mode-aware Mission Control endpoint status and OpenClaw endpoint checks when enabled.
+
+16. Restart hang fix verification (2026-05-04)
+    - `make up`
+      - Completed successfully.
+    - `make restart`
+      - Completed successfully; MC restarted and OpenClaw restart step now skips cold-start when gateway is not running.
+    - `make status`
+      - Completed successfully.
+    - `make -- restart --dev`
+      - Completed successfully with CLI mode override.
+    - `make restart mc`
+      - Completed successfully (MC-only restart).
+    - `make restart openclaw`
+      - Completed successfully (explicit OpenClaw restart-or-up path).
 
 ## Finalize
 <!-- beads-phase-id: TBD -->

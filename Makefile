@@ -206,7 +206,7 @@ restart:  ## Restart selected mode (+ OpenClaw when enabled)
 	  all) \
 	    $(MAKE_SUB) mc-restart; \
 	    if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
-	      $(MAKE_SUB) openclaw-restart-or-up; \
+	      $(MAKE_SUB) openclaw-restart-if-running; \
 	    fi; \
 	    ;; \
 	esac
@@ -366,7 +366,7 @@ upgrade-openclaw: openclaw-update
 .PHONY: wait-ready
 wait-ready:  ## Block until /login responds 200
 	@for i in $$(seq 1 30); do \
-	  status=$$(curl -sS -o /dev/null -L -w '%{http_code}' $(URL) 2>/dev/null || true); \
+	  status=$$(curl -sS --connect-timeout 1 --max-time 2 -o /dev/null -L -w '%{http_code}' $(URL) 2>/dev/null || true); \
 	  if [ "$$status" = "200" ]; then echo "  ✓ $(URL) → 200"; exit 0; fi; \
 	  sleep 1; \
 	done; \

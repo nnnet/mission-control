@@ -31,6 +31,7 @@ make -- <verb> [all|mc|openclaw] [--dev|--prod]
 - `all` is the default scope.
 - `--dev` / `--prod` overrides `MC_MODE` for a single invocation.
 - GNU Make parses `--dev`/`--prod` as options unless you separate with `make -- ...`.
+- `make restart` (default `all`) restarts OpenClaw only if it is already running; use `make restart openclaw` or `make up openclaw` for explicit startup.
 
 Examples (requested grammar + executable form):
 
