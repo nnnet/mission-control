@@ -25,6 +25,11 @@ function isMissingOpenClaw(detail: string): boolean {
   return /enoent|not installed|not reachable|command not found/i.test(detail)
 }
 
+function shouldHideDoctorInfoLines(): boolean {
+  const raw = String(process.env.MC_OPENCLAW_DOCTOR_HIDE_INFO || '').trim().toLowerCase()
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on'
+}
+
 export async function GET(request: Request) {
   const auth = requireRole(request, 'admin')
   if ('error' in auth) {
@@ -35,6 +40,7 @@ export async function GET(request: Request) {
     const result = await runOpenClaw(['doctor'], { timeoutMs: 15000 })
     return NextResponse.json(parseOpenClawDoctorOutput(`${result.stdout}\n${result.stderr}`, result.code ?? 0, {
       stateDir: config.openclawStateDir,
+      hideInformationalSecurityLines: shouldHideDoctorInfoLines(),
     }), {
       headers: { 'Cache-Control': 'no-store' },
     })
@@ -46,6 +52,7 @@ export async function GET(request: Request) {
 
     return NextResponse.json(parseOpenClawDoctorOutput(detail, code ?? 1, {
       stateDir: config.openclawStateDir,
+      hideInformationalSecurityLines: shouldHideDoctorInfoLines(),
     }), {
       headers: { 'Cache-Control': 'no-store' },
     })
@@ -84,6 +91,7 @@ export async function POST(request: Request) {
     const postFix = await runOpenClaw(['doctor'], { timeoutMs: 15000 })
     const status = parseOpenClawDoctorOutput(`${postFix.stdout}\n${postFix.stderr}`, postFix.code ?? 0, {
       stateDir: config.openclawStateDir,
+      hideInformationalSecurityLines: shouldHideDoctorInfoLines(),
     })
 
     try {
@@ -119,6 +127,7 @@ export async function POST(request: Request) {
         detail,
         status: parseOpenClawDoctorOutput(detail, code ?? 1, {
           stateDir: config.openclawStateDir,
+          hideInformationalSecurityLines: shouldHideDoctorInfoLines(),
         }),
       },
       { status: 500 }

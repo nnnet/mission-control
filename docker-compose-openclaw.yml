@@ -76,6 +76,9 @@ services:
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_NUMERIC_USER_ID: ${TELEGRAM_NUMERIC_USER_ID:-}
+      TELEGRAM_DM_POLICY: ${TELEGRAM_DM_POLICY:-}
+      TELEGRAM_ALLOW_FROM: ${TELEGRAM_ALLOW_FROM:-}
+      TELEGRAM_OWNER_ALLOW_FROM: ${TELEGRAM_OWNER_ALLOW_FROM:-}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
       OPENCLAW_DISABLE_BONJOUR: ${OPENCLAW_DISABLE_BONJOUR:-1}
       # Plugin runtime stage dir lives under bind-mounted state so it inherits
@@ -134,9 +137,73 @@ services:
           const trimEnv=(name)=>String(process.env[name]||'').trim();
           const gatewayToken=trimEnv('OPENCLAW_GATEWAY_TOKEN');
           const telegramBotToken=trimEnv('TELEGRAM_BOT_TOKEN');
-          const telegramOwnerId=trimEnv('TELEGRAM_NUMERIC_USER_ID');
+          const telegramOwnerIdRaw=trimEnv('TELEGRAM_NUMERIC_USER_ID');
+          const telegramDmPolicyRaw=trimEnv('TELEGRAM_DM_POLICY').toLowerCase();
+          const telegramAllowFromRaw=trimEnv('TELEGRAM_ALLOW_FROM');
+          const telegramOwnerAllowFromRaw=trimEnv('TELEGRAM_OWNER_ALLOW_FROM');
           const commands=(config.commands && typeof config.commands==='object' && !Array.isArray(config.commands)) ? config.commands : {};
-          const isNumericTelegramUserId=/^[1-9][0-9]*$/.test(telegramOwnerId);
+          const parseCsv=(raw)=>raw.split(',').map((entry)=>String(entry||'').trim()).filter(Boolean);
+          const parseNumericIds=(raw)=>{
+            const seen=new Set();
+            const out=[];
+            for (const entry of parseCsv(raw)) {
+              if (!/^[1-9][0-9]*$/.test(entry)) continue;
+              if (seen.has(entry)) continue;
+              seen.add(entry);
+              out.push(entry);
+            }
+            return out;
+          };
+          const normalizeOwnerIdentity=(entry)=>{
+            const value=String(entry||'').trim();
+            if (!value) return null;
+            if (/^[1-9][0-9]*$/.test(value)) return 'telegram:'+value;
+            const prefixed=value.match(/^telegram:([1-9][0-9]*)$/);
+            if (!prefixed) return null;
+            return 'telegram:'+prefixed[1];
+          };
+          const parseOwnerAllowFrom=(raw)=>{
+            const seen=new Set();
+            const out=[];
+            for (const entry of parseCsv(raw)) {
+              const normalized=normalizeOwnerIdentity(entry);
+              if (!normalized || seen.has(normalized)) continue;
+              seen.add(normalized);
+              out.push(normalized);
+            }
+            return out;
+          };
+          const mergeUnique=(existing, additions)=>{
+            const seen=new Set();
+            const out=[];
+            if (Array.isArray(existing)) {
+              for (const entry of existing) {
+                const normalized=String(entry||'').trim();
+                if (!normalized || seen.has(normalized)) continue;
+                seen.add(normalized);
+                out.push(normalized);
+              }
+            }
+            for (const entry of additions) {
+              const normalized=String(entry||'').trim();
+              if (!normalized || seen.has(normalized)) continue;
+              seen.add(normalized);
+              out.push(normalized);
+            }
+            return out;
+          };
+          const validTelegramDmPolicies=new Set(['allowlist','pairing','open']);
+          const telegramLegacyOwnerIds=parseNumericIds(telegramOwnerIdRaw);
+          let telegramAllowFrom=parseNumericIds(telegramAllowFromRaw);
+          let telegramOwnerAllowFrom=parseOwnerAllowFrom(telegramOwnerAllowFromRaw);
+          if (telegramLegacyOwnerIds.length>0) {
+            telegramAllowFrom=mergeUnique(telegramAllowFrom, telegramLegacyOwnerIds);
+            telegramOwnerAllowFrom=mergeUnique(telegramOwnerAllowFrom, telegramLegacyOwnerIds.map((id)=>'telegram:'+id));
+          }
+          const telegramDmPolicy=validTelegramDmPolicies.has(telegramDmPolicyRaw)
+            ? telegramDmPolicyRaw
+            : (telegramLegacyOwnerIds.length>0 ? 'allowlist' : 'pairing');
+          const shouldBootstrapTelegram = telegramBotToken.length>0 || telegramAllowFrom.length>0 || telegramOwnerAllowFrom.length>0 || telegramLegacyOwnerIds.length>0 || telegramDmPolicyRaw.length>0;
           const gatewayPort=trimEnv('OPENCLAW_GATEWAY_INTERNAL_PORT') || '18789';
           const controlUiPort=trimEnv('OPENCLAW_CONTROL_UI_PORT') || '18791';
           const normalizedOrigins=Array.isArray(controlUi.allowedOrigins)
@@ -166,7 +233,7 @@ services:
           }
           config.gateway=gateway;
 
-          if (telegramBotToken.length>0 || isNumericTelegramUserId) {
+          if (shouldBootstrapTelegram) {
             const channels=(config.channels && typeof config.channels==='object' && !Array.isArray(config.channels)) ? config.channels : {};
             const telegram=(channels.telegram && typeof channels.telegram==='object' && !Array.isArray(channels.telegram)) ? channels.telegram : {};
             telegram.enabled=true;
@@ -177,24 +244,13 @@ services:
                 id:'TELEGRAM_BOT_TOKEN',
               };
             }
-            if (isNumericTelegramUserId) {
-              const ownerAllowFrom=Array.isArray(commands.ownerAllowFrom)
-                ? commands.ownerAllowFrom
-                    .map((entry)=>String(entry||'').trim())
-                    .filter((entry)=>entry.length>0)
-                : [];
-              const telegramOwnerEntry='telegram:'+telegramOwnerId;
-              if (!ownerAllowFrom.includes(telegramOwnerEntry)) ownerAllowFrom.push(telegramOwnerEntry);
-              commands.ownerAllowFrom=ownerAllowFrom;
-              const allowFrom=Array.isArray(telegram.allowFrom)
-                ? telegram.allowFrom
-                    .map((entry)=>String(entry||'').trim())
-                    .filter((entry)=>entry.length>0)
-                : [];
-              if (!allowFrom.includes(telegramOwnerId)) allowFrom.push(telegramOwnerId);
-              telegram.allowFrom=allowFrom;
-              telegram.dmPolicy='allowlist';
+            if (telegramOwnerAllowFrom.length>0) {
+              commands.ownerAllowFrom=mergeUnique(commands.ownerAllowFrom, telegramOwnerAllowFrom);
             }
+            if (telegramAllowFrom.length>0) {
+              telegram.allowFrom=mergeUnique(telegram.allowFrom, telegramAllowFrom);
+            }
+            telegram.dmPolicy=telegramDmPolicy;
             channels.telegram=telegram;
             config.channels=channels;
           }
@@ -242,6 +298,9 @@ services:
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_NUMERIC_USER_ID: ${TELEGRAM_NUMERIC_USER_ID:-}
+      TELEGRAM_DM_POLICY: ${TELEGRAM_DM_POLICY:-}
+      TELEGRAM_ALLOW_FROM: ${TELEGRAM_ALLOW_FROM:-}
+      TELEGRAM_OWNER_ALLOW_FROM: ${TELEGRAM_OWNER_ALLOW_FROM:-}
       OPENCLAW_PLUGIN_STAGE_DIR: /home/node/.openclaw/plugin-runtime-deps
       OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

@@ -1,4 +1,4 @@
-# OpenClaw Telegram Onboarding (dmPolicy=`pairing`)
+# OpenClaw Telegram Onboarding (env-driven DM policy)
 
 If your bot token is set but Mission Control/OpenClaw still shows:
 
@@ -6,17 +6,31 @@ If your bot token is set but Mission Control/OpenClaw still shows:
 
 that is **expected**. `pairing` is the secure default and is informational, not a failure.
 
-## Required `.env` keys
+## `.env` / `.env.openclaw` keys
 
 ```env
 TELEGRAM_BOT_TOKEN=<your-bot-token>
 TELEGRAM_NUMERIC_USER_ID=<your-numeric-telegram-id>
+TELEGRAM_DM_POLICY=pairing
+# optional csv numeric ids
+TELEGRAM_ALLOW_FROM=
+# optional csv values: telegram:<id> or numeric id
+TELEGRAM_OWNER_ALLOW_FROM=
 ```
 
-When both are present, OpenClaw bootstrap keeps DM access scoped by setting:
-- `commands.ownerAllowFrom += ["telegram:<TELEGRAM_NUMERIC_USER_ID>"]`
-- `channels.telegram.allowFrom += ["<TELEGRAM_NUMERIC_USER_ID>"]`
-- `channels.telegram.dmPolicy = "allowlist"`
+`TELEGRAM_DM_POLICY` behavior:
+
+- `pairing` (secure default): unknown DM users must be approved via pairing flow.
+- `allowlist`: only IDs in `channels.telegram.allowFrom` can DM.
+- `open`: no DM sender restriction.
+
+Legacy compatibility is preserved:
+
+- `TELEGRAM_NUMERIC_USER_ID` is still supported.
+- Its numeric id is merged into:
+  - `commands.ownerAllowFrom += ["telegram:<id>"]`
+  - `channels.telegram.allowFrom += ["<id>"]`
+- If no explicit `TELEGRAM_DM_POLICY` is set and `TELEGRAM_NUMERIC_USER_ID` exists, bootstrap keeps legacy `allowlist` behavior.
 
 ## 1) Find your Telegram user ID
 
@@ -29,7 +43,7 @@ curl -sS "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getUpdates"
 
 3. Read your numeric ID from `message.from.id`.
 
-## 2) Approve your DM pairing identity
+## 2) Approve your DM pairing identity (required when `TELEGRAM_DM_POLICY=pairing`)
 
 List pending pairings:
 
@@ -43,7 +57,7 @@ Approve your Telegram user ID:
 docker compose -f docker-compose-openclaw.yml run --rm openclaw-cli pairing approve <TELEGRAM_USER_ID>
 ```
 
-## 3) Add allowlists in `openclaw.json`
+## 3) Optional explicit allowlists in `openclaw.json`
 
 Set explicit owner/channel allowlists (replace with your ID):
 
@@ -63,10 +77,24 @@ Set explicit owner/channel allowlists (replace with your ID):
 - `commands.ownerAllowFrom` is recommended for owner-level commands.
 - `channels.telegram.allowFrom` is optional but recommended for tighter channel ACLs.
 
-## 4) Restart gateway
+## 4) Optional: hide non-actionable doctor security info in MC UI
+
+If you want Mission Control to suppress informational doctor lines like:
+
+- `No channel security warnings detected.`
+- `Run: openclaw security audit --deep`
+
+set:
+
+```env
+MC_OPENCLAW_DOCTOR_HIDE_INFO=1
+```
+
+## 5) Restart gateway + MC
 
 ```bash
 make openclaw-restart
+make restart mc
 ```
 
 Then re-run:

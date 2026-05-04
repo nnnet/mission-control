@@ -13,6 +13,11 @@ export interface OpenClawDoctorStatus {
   raw: string
 }
 
+interface ParseOpenClawDoctorOptions {
+  stateDir?: string
+  hideInformationalSecurityLines?: boolean
+}
+
 function normalizeLine(line: string): string {
   return line
     .replace(/\u001b\[[0-9;]*m/g, '')
@@ -35,8 +40,18 @@ function isPositiveOrInstructionalLine(line: string): boolean {
     /^all .* (healthy|ok|valid|passed)/i.test(line)
 }
 
+function isInformationalSecurityLine(line: string): boolean {
+  return /^no channel security warnings detected\.?$/i.test(line) ||
+    /^run:\s*openclaw security audit --deep$/i.test(line)
+}
+
 function isDecorativeLine(line: string): boolean {
   return /^[▄█▀░\s]+$/.test(line) || /openclaw doctor/i.test(line) || /🦞\s*openclaw\s*🦞/i.test(line)
+}
+
+function isSectionHeadingLine(line: string): boolean {
+  return /^[?◇]\s*(security|state integrity|configuration|config)/i.test(line) ||
+    /^(security|state integrity|configuration|config)$/i.test(line)
 }
 
 function isStateDirectoryListLine(line: string): boolean {
@@ -109,6 +124,19 @@ function stripForeignStateDirectoryWarning(rawOutput: string, stateDir?: string)
   return kept.join('\n')
 }
 
+function stripInformationalSecurityLines(rawOutput: string): string {
+  return rawOutput
+    .split(/\r?\n/)
+    .filter(line => {
+      const normalized = normalizeLine(line)
+        .replace(/[\s│┃║┆┊╎╏]+$/, '')
+        .replace(/^[-*]\s+/, '')
+        .trim()
+      return !isInformationalSecurityLine(normalized)
+    })
+    .join('\n')
+}
+
 function detectCategory(raw: string, issues: string[]): OpenClawDoctorCategory {
   const haystack = `${raw}\n${issues.join('\n')}`.toLowerCase()
 
@@ -130,9 +158,12 @@ function detectCategory(raw: string, issues: string[]): OpenClawDoctorCategory {
 export function parseOpenClawDoctorOutput(
   rawOutput: string,
   exitCode = 0,
-  options: { stateDir?: string } = {}
+  options: ParseOpenClawDoctorOptions = {}
 ): OpenClawDoctorStatus {
-  const raw = stripForeignStateDirectoryWarning(rawOutput.trim(), options.stateDir).trim()
+  const preprocessedRaw = options.hideInformationalSecurityLines
+    ? stripInformationalSecurityLines(rawOutput)
+    : rawOutput
+  const raw = stripForeignStateDirectoryWarning(preprocessedRaw.trim(), options.stateDir).trim()
   const lines = raw
     .split(/\r?\n/)
     .map(normalizeLine)
@@ -147,13 +178,19 @@ export function parseOpenClawDoctorOutput(
   const rawForWarningCheck = raw.replace(/\bno\s+\w+\s+(?:security\s+)?warnings?\s+detected\b/gi, '')
   const mentionsWarnings = /\bwarning|warnings|problem|problems|invalid config|fix\b/i.test(rawForWarningCheck)
   const mentionsHealthy = /\bok\b|\bhealthy\b|\bno issues\b|\bno\b.*\bwarnings?\s+detected\b|\bvalid\b/i.test(raw)
+  const actionableLines = lines.filter(line =>
+    !isSectionHeadingLine(line) &&
+    !isDecorativeLine(line) &&
+    !/^run:/i.test(line) &&
+    !/^file:/i.test(line)
+  )
 
   let level: OpenClawDoctorLevel = 'healthy'
   if (exitCode !== 0 || /invalid config|failed|error/i.test(raw)) {
     level = 'error'
   } else if (issues.length > 0 || mentionsWarnings) {
     level = 'warning'
-  } else if (!mentionsHealthy && lines.length > 0) {
+  } else if (!mentionsHealthy && actionableLines.length > 0) {
     level = 'warning'
   }
 

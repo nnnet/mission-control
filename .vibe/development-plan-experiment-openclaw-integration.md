@@ -475,6 +475,26 @@
       - `make openclaw-status`
         - Gateway/control endpoints healthy and MC→Gateway linkage OK.
 
+19. Env-driven Telegram policy + doctor info suppression follow-up (2026-05-04)
+    - Implemented env-driven Telegram config projection for both bootstrap paths:
+      - Gateway prestart bootstrap in `docker-compose-openclaw.yml` (`.openclaw-data/openclaw.json`).
+      - MC CLI shim bootstrap in `scripts/openclaw-cli-shim.py` (`.mc-openclaw/openclaw.json`).
+    - Added env controls:
+      - `TELEGRAM_DM_POLICY` (`allowlist|pairing|open`; secure default `pairing`, with legacy fallback to `allowlist` when only `TELEGRAM_NUMERIC_USER_ID` is set).
+      - `TELEGRAM_ALLOW_FROM` (csv numeric ids).
+      - `TELEGRAM_OWNER_ALLOW_FROM` (csv `telegram:<id>` or numeric normalized to `telegram:<id>`).
+      - Preserved support for `TELEGRAM_BOT_TOKEN` + `TELEGRAM_NUMERIC_USER_ID` and merged legacy id into channel/owner allowlists idempotently.
+    - Added MC doctor output info suppression toggle:
+      - `MC_OPENCLAW_DOCTOR_HIDE_INFO=1` strips non-actionable informational security lines from parsed doctor output while preserving actionable warnings/errors.
+      - Suppressed lines:
+        - `No channel security warnings detected.`
+        - `Run: openclaw security audit --deep`
+    - Verification notes captured in session runbook:
+      - Restarted MC + OpenClaw services with updated env/compose bootstrap.
+      - Confirmed projected config values via `jq` in both `.openclaw-data/openclaw.json` and `.mc-openclaw/openclaw.json`.
+      - Confirmed doctor output suppression in MC API payload when `MC_OPENCLAW_DOCTOR_HIDE_INFO=1`.
+      - Confirmed gateway and MC health/status remained green.
+
 ## Finalize
 <!-- beads-phase-id: TBD -->
 ### Tasks

@@ -50,6 +50,77 @@ from typing import List, Optional
 
 OPENCLAW_DIST = "/opt/openclaw-src/dist/index.js"
 
+VALID_TELEGRAM_DM_POLICIES = {"allowlist", "pairing", "open"}
+
+
+def parse_csv_entries(raw: str) -> List[str]:
+    return [entry.strip() for entry in raw.split(",") if entry.strip()]
+
+
+def parse_telegram_numeric_ids(raw: str) -> List[str]:
+    out: List[str] = []
+    for entry in parse_csv_entries(raw):
+        if not re.fullmatch(r"[1-9][0-9]*", entry):
+            continue
+        if entry not in out:
+            out.append(entry)
+    return out
+
+
+def normalize_owner_identity(entry: str) -> Optional[str]:
+    value = entry.strip()
+    if not value:
+        return None
+    numeric_match = re.fullmatch(r"[1-9][0-9]*", value)
+    if numeric_match:
+        return f"telegram:{value}"
+    prefixed_match = re.fullmatch(r"telegram:([1-9][0-9]*)", value)
+    if prefixed_match:
+        return f"telegram:{prefixed_match.group(1)}"
+    return None
+
+
+def parse_owner_allow_from(raw: str) -> List[str]:
+    out: List[str] = []
+    for entry in parse_csv_entries(raw):
+        normalized = normalize_owner_identity(entry)
+        if normalized and normalized not in out:
+            out.append(normalized)
+    return out
+
+
+def merged_unique(existing: object, additions: List[str]) -> List[str]:
+    seen = set()
+    merged: List[str] = []
+
+    if isinstance(existing, list):
+        for entry in existing:
+            normalized = str(entry).strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            merged.append(normalized)
+
+    for entry in additions:
+        normalized = str(entry).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        merged.append(normalized)
+
+    return merged
+
+
+def resolve_telegram_dm_policy(explicit_policy_raw: str, legacy_owner_ids: List[str]) -> str:
+    explicit_policy = explicit_policy_raw.lower().strip()
+    if explicit_policy in VALID_TELEGRAM_DM_POLICIES:
+        return explicit_policy
+    # Backward compatibility for existing TELEGRAM_NUMERIC_USER_ID-only setups.
+    if legacy_owner_ids:
+        return "allowlist"
+    # Secure default when no explicit policy exists.
+    return "pairing"
+
 
 def resolve_openclaw_paths() -> tuple[Path, Path, Path]:
     state_dir = Path(os.environ.get("OPENCLAW_STATE_DIR", str(Path.home() / ".openclaw"))).expanduser()
@@ -85,10 +156,27 @@ def ensure_openclaw_state_defaults() -> None:
         commands = {}
 
     telegram_bot_token = str(os.environ.get("TELEGRAM_BOT_TOKEN", "")).strip()
-    telegram_owner_id = str(os.environ.get("TELEGRAM_NUMERIC_USER_ID", "")).strip()
-    has_numeric_telegram_owner = bool(re.fullmatch(r"[1-9][0-9]*", telegram_owner_id))
+    legacy_owner_ids = parse_telegram_numeric_ids(str(os.environ.get("TELEGRAM_NUMERIC_USER_ID", "")))
+    channel_allow_from = parse_telegram_numeric_ids(str(os.environ.get("TELEGRAM_ALLOW_FROM", "")))
+    owner_allow_from = parse_owner_allow_from(str(os.environ.get("TELEGRAM_OWNER_ALLOW_FROM", "")))
+    telegram_dm_policy = resolve_telegram_dm_policy(
+        str(os.environ.get("TELEGRAM_DM_POLICY", "")),
+        legacy_owner_ids,
+    )
 
-    if telegram_bot_token or has_numeric_telegram_owner:
+    if legacy_owner_ids:
+        channel_allow_from = merged_unique(channel_allow_from, legacy_owner_ids)
+        owner_allow_from = merged_unique(owner_allow_from, [f"telegram:{owner_id}" for owner_id in legacy_owner_ids])
+
+    should_bootstrap_telegram = (
+        bool(telegram_bot_token)
+        or bool(channel_allow_from)
+        or bool(owner_allow_from)
+        or "TELEGRAM_DM_POLICY" in os.environ
+        or bool(legacy_owner_ids)
+    )
+
+    if should_bootstrap_telegram:
         channels = config.get("channels")
         if not isinstance(channels, dict):
             channels = {}
@@ -106,28 +194,13 @@ def ensure_openclaw_state_defaults() -> None:
                 "id": "TELEGRAM_BOT_TOKEN",
             }
 
-        if has_numeric_telegram_owner:
-            owner_allow_from = [
-                str(entry).strip()
-                for entry in commands.get("ownerAllowFrom", [])
-                if str(entry).strip()
-            ] if isinstance(commands.get("ownerAllowFrom"), list) else []
+        if owner_allow_from:
+            commands["ownerAllowFrom"] = merged_unique(commands.get("ownerAllowFrom"), owner_allow_from)
 
-            owner_entry = f"telegram:{telegram_owner_id}"
-            if owner_entry not in owner_allow_from:
-                owner_allow_from.append(owner_entry)
-            commands["ownerAllowFrom"] = owner_allow_from
+        if channel_allow_from:
+            telegram["allowFrom"] = merged_unique(telegram.get("allowFrom"), channel_allow_from)
 
-            allow_from = [
-                str(entry).strip()
-                for entry in telegram.get("allowFrom", [])
-                if str(entry).strip()
-            ] if isinstance(telegram.get("allowFrom"), list) else []
-
-            if telegram_owner_id not in allow_from:
-                allow_from.append(telegram_owner_id)
-            telegram["allowFrom"] = allow_from
-            telegram["dmPolicy"] = "allowlist"
+        telegram["dmPolicy"] = telegram_dm_policy
 
         channels["telegram"] = telegram
         config["channels"] = channels
