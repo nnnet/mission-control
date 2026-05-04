@@ -17,6 +17,7 @@ OPENCLAW_SRC := $(PROJECT_DIR)/openclaw-src
 OPENCLAW_REPO := https://github.com/openclaw/openclaw.git
 OPENCLAW_REF  := main
 MC_MODE ?= prod
+MC_MODE_DEFAULT := $(MC_MODE)
 OPENCLAW_ENABLED ?= 1
 CONTAINER   := mission-control
 CONTAINER_DEV := mission-control-dev
@@ -30,17 +31,39 @@ OPENCLAW_STATUS_HOST ?= 127.0.0.1
 OPENCLAW_GATEWAY_PORT ?= 18789
 OPENCLAW_CONTROL_UI_PORT ?= 18791
 
-VALID_MC_MODE := $(filter $(MC_MODE),prod dev)
-ifeq ($(VALID_MC_MODE),)
-$(error Invalid MC_MODE='$(MC_MODE)'. Expected 'prod' or 'dev')
+MODE_FLAG_WORDS := $(filter --dev --prod,$(MAKECMDGOALS))
+ifneq ($(words $(MODE_FLAG_WORDS)),0)
+ifneq ($(words $(MODE_FLAG_WORDS)),1)
+$(error Conflicting mode flags $(MODE_FLAG_WORDS). Use only one of --dev or --prod)
 endif
+endif
+
+CLI_MODE_OVERRIDE := $(patsubst --%,%,$(firstword $(MODE_FLAG_WORDS)))
+EFFECTIVE_MC_MODE := $(if $(CLI_MODE_OVERRIDE),$(CLI_MODE_OVERRIDE),$(MC_MODE))
+
+# Propagate effective mode into recursive $(MAKE) invocations.
+MC_MODE := $(EFFECTIVE_MC_MODE)
+
+VALID_EFFECTIVE_MC_MODE := $(filter $(EFFECTIVE_MC_MODE),prod dev)
+ifeq ($(VALID_EFFECTIVE_MC_MODE),)
+$(error Invalid MC mode '$(EFFECTIVE_MC_MODE)'. Expected 'prod' or 'dev' (from --dev/--prod or MC_MODE))
+endif
+
+SCOPE_WORDS := $(filter all mc openclaw,$(MAKECMDGOALS))
+ifneq ($(words $(SCOPE_WORDS)),0)
+ifneq ($(words $(SCOPE_WORDS)),1)
+$(error Conflicting component selectors $(SCOPE_WORDS). Use only one of all, mc, or openclaw)
+endif
+endif
+
+TARGET_SCOPE := $(if $(SCOPE_WORDS),$(firstword $(SCOPE_WORDS)),all)
 
 VALID_OPENCLAW_ENABLED := $(filter $(OPENCLAW_ENABLED),0 1)
 ifeq ($(VALID_OPENCLAW_ENABLED),)
 $(error Invalid OPENCLAW_ENABLED='$(OPENCLAW_ENABLED)'. Expected '0' or '1')
 endif
 
-ifeq ($(MC_MODE),dev)
+ifeq ($(EFFECTIVE_MC_MODE),dev)
 MC_COMPOSE := $(COMPOSE_DEV)
 MC_CONTAINER := $(CONTAINER_DEV)
 MC_STACK_LABEL := dev
@@ -51,24 +74,39 @@ MC_STACK_LABEL := prod
 endif
 
 .DEFAULT_GOAL := help
+MAKE_SUB := $(MAKE) --no-print-directory MC_MODE=$(EFFECTIVE_MC_MODE)
+
+# Selector/mode tokens for `make <verb> [scope] [--mode]`
+.PHONY: all mc openclaw --dev --prod
+all mc openclaw --dev --prod:
+	@:
 
 # ── Help ───────────────────────────────────────────────────────────────────
 .PHONY: help
 help:  ## Show minimal day-to-day commands
 	@printf "\nMission Control Make workflow\n\n"
-	@printf "  Selected mode:      %s\n" "$(MC_MODE)"
+	@printf "  Effective mode:     %s\n" "$(EFFECTIVE_MC_MODE)"
+	@printf "  Mode source:        %s\n" "$(if $(CLI_MODE_OVERRIDE),flag $(firstword $(MODE_FLAG_WORDS)),MC_MODE=$(MC_MODE_DEFAULT))"
+	@printf "  Target scope:       %s\n" "$(TARGET_SCOPE)"
 	@printf "  OpenClaw enabled:   %s (1=yes, 0=no)\n\n" "$(OPENCLAW_ENABLED)"
-	@printf "Set defaults in .env:\n"
+	@printf "Set defaults in .env/.env.openclaw:\n"
 	@printf "  MC_MODE=prod|dev\n"
 	@printf "  OPENCLAW_ENABLED=1|0\n\n"
+	@printf "Grammar:\n"
+	@printf "  %-20s %s\n" "make <verb> [scope]" "scope: all (default) | mc | openclaw"
+	@printf "  %-20s %s\n\n" "make -- <verb> [scope] [--dev|--prod]" "mode flags override MC_MODE for this run"
 	@printf "Recommended commands:\n"
-	@printf "  %-20s %s\n" "make up" "Start selected MC stack (+ OpenClaw when enabled)"
-	@printf "  %-20s %s\n" "make restart" "Restart selected MC stack (+ OpenClaw when enabled)"
-	@printf "  %-20s %s\n" "make down" "Stop selected MC stack (+ OpenClaw when enabled)"
-	@printf "  %-20s %s\n" "make status" "Show mode-aware health and endpoint status"
+	@printf "  %-20s %s\n" "make up" "Start stack for scope (all respects OPENCLAW_ENABLED)"
+	@printf "  %-20s %s\n" "make restart" "Restart stack for scope"
+	@printf "  %-20s %s\n" "make down" "Stop stack for scope"
+	@printf "  %-20s %s\n" "make status" "Show health for scope"
 	@printf "  %-20s %s\n" "make update" "Refresh source/state only (no forced rebuild)"
-	@printf "  %-20s %s\n" "make rebuild" "Force no-cache image rebuild + recreate selected mode"
-	@printf "  %-20s %s\n" "make upgrade" "update + rebuild + restart (+ OpenClaw upgrade when enabled)"
+	@printf "  %-20s %s\n" "make rebuild" "Force rebuild selected component(s)"
+	@printf "  %-20s %s\n" "make upgrade" "update + rebuild + restart for scope"
+	@printf "\nExamples:\n"
+	@printf "  %-20s %s\n" "make status openclaw" "OpenClaw-only status"
+	@printf "  %-20s %s\n" "make -- up --dev" "Start all in dev mode for this invocation"
+	@printf "  %-20s %s\n" "make -- restart mc --prod" "Restart MC only in prod mode"
 	@printf "\nAdvanced:\n"
 	@printf "  %-20s %s\n" "make help-all" "List all available targets"
 
@@ -83,27 +121,41 @@ help-all:  ## List all targets
 mc-up:
 	@cd $(PROJECT_DIR)
 	$(MC_COMPOSE) up -d $(ARGS)
-	@$(MAKE) --no-print-directory wait-ready
+	@$(MAKE_SUB) wait-ready
 
 .PHONY: up
 up:  ## Start selected mode (+ OpenClaw when enabled)
-	@$(MAKE) --no-print-directory mc-up ARGS="$(ARGS)"
-	@if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
-	  $(MAKE) --no-print-directory openclaw-up; \
-	else \
-	  echo "OpenClaw disabled (OPENCLAW_ENABLED=0)"; \
+	@case "$(TARGET_SCOPE)" in \
+	  mc) \
+	    $(MAKE_SUB) mc-up ARGS="$(ARGS)"; \
+	    ;; \
+	  openclaw) \
+	    $(MAKE_SUB) openclaw-up; \
+	    ;; \
+	  all) \
+	    $(MAKE_SUB) mc-up ARGS="$(ARGS)"; \
+	    if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
+	      $(MAKE_SUB) openclaw-up; \
+	    else \
+	      echo "OpenClaw disabled (OPENCLAW_ENABLED=0): skipping OpenClaw startup"; \
+	    fi; \
+	    ;; \
+	esac
+	@if [ "$(TARGET_SCOPE)" != "openclaw" ]; then \
+	  echo; \
+	  echo "Mission Control ($(MC_STACK_LABEL)) is up at $(URL)"; \
+	  echo "  /setup    — create admin (first run)"; \
+	  echo "  /login    — sign in"; \
+	  echo "  /tasks    — Kanban board"; \
+	  echo "  /agents   — agent registry"; \
 	fi
-	@echo
-	@echo "Mission Control ($(MC_STACK_LABEL)) is up at $(URL)"
-	@if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
-	  echo "OpenClaw endpoints:"; \
-	  echo "  gateway  — http://$(OPENCLAW_STATUS_HOST):$(OPENCLAW_GATEWAY_PORT)/healthz"; \
-	  echo "  control  — http://$(OPENCLAW_STATUS_HOST):$(OPENCLAW_CONTROL_UI_PORT)/"; \
+	@if [ "$(TARGET_SCOPE)" != "mc" ]; then \
+	  if [ "$(TARGET_SCOPE)" = "openclaw" ] || [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
+	    echo "OpenClaw endpoints:"; \
+	    echo "  gateway  — http://$(OPENCLAW_STATUS_HOST):$(OPENCLAW_GATEWAY_PORT)/healthz"; \
+	    echo "  control  — http://$(OPENCLAW_STATUS_HOST):$(OPENCLAW_CONTROL_UI_PORT)/"; \
+	  fi; \
 	fi
-	@echo "  /setup    — create admin (first run)"
-	@echo "  /login    — sign in"
-	@echo "  /tasks    — Kanban board"
-	@echo "  /agents   — agent registry"
 
 .PHONY: mc-down
 mc-down:
@@ -112,36 +164,56 @@ mc-down:
 
 .PHONY: down
 down:  ## Stop selected mode (+ OpenClaw when enabled)
-	@if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
-	  $(MAKE) --no-print-directory openclaw-down; \
-	fi
-	@$(MAKE) --no-print-directory mc-down
+	@case "$(TARGET_SCOPE)" in \
+	  mc) \
+	    $(MAKE_SUB) mc-down; \
+	    ;; \
+	  openclaw) \
+	    $(MAKE_SUB) openclaw-down; \
+	    ;; \
+	  all) \
+	    if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
+	      $(MAKE_SUB) openclaw-down; \
+	    fi; \
+	    $(MAKE_SUB) mc-down; \
+	    ;; \
+	esac
 
 .PHONY: mc-restart
 mc-restart:
 	@cd $(PROJECT_DIR)
 	$(MC_COMPOSE) restart
-	@$(MAKE) --no-print-directory wait-ready
+	@$(MAKE_SUB) wait-ready
 
 .PHONY: openclaw-restart-or-up
 openclaw-restart-or-up:
 	@cd $(PROJECT_DIR)
 	@if docker ps --format '{{.Names}}' | grep -q '^$(OPENCLAW_GATEWAY_CONTAINER)$$'; then \
-	  $(MAKE) --no-print-directory openclaw-restart; \
+	  $(MAKE_SUB) openclaw-restart; \
 	else \
-	  $(MAKE) --no-print-directory openclaw-up; \
+	  $(MAKE_SUB) openclaw-up; \
 	fi
 
 .PHONY: restart
 restart:  ## Restart selected mode (+ OpenClaw when enabled)
-	@$(MAKE) --no-print-directory mc-restart
-	@if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
-	  $(MAKE) --no-print-directory openclaw-restart-or-up; \
-	fi
+	@case "$(TARGET_SCOPE)" in \
+	  mc) \
+	    $(MAKE_SUB) mc-restart; \
+	    ;; \
+	  openclaw) \
+	    $(MAKE_SUB) openclaw-restart-or-up; \
+	    ;; \
+	  all) \
+	    $(MAKE_SUB) mc-restart; \
+	    if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
+	      $(MAKE_SUB) openclaw-restart-or-up; \
+	    fi; \
+	    ;; \
+	esac
 
 .PHONY: recreate
 recreate:  ## Force recreate selected mode container
-	@$(MAKE) --no-print-directory up ARGS="--force-recreate"
+	@$(MAKE_SUB) up ARGS="--force-recreate"
 
 .PHONY: build
 build:  ## Build/refresh selected mode Mission Control image
@@ -150,9 +222,31 @@ build:  ## Build/refresh selected mode Mission Control image
 
 .PHONY: rebuild
 rebuild:  ## Rebuild image (no cache) and recreate selected mode
+	@case "$(TARGET_SCOPE)" in \
+	  mc) \
+	    $(MAKE_SUB) rebuild-mc; \
+	    ;; \
+	  openclaw) \
+	    $(MAKE_SUB) rebuild-openclaw; \
+	    ;; \
+	  all) \
+	    $(MAKE_SUB) rebuild-mc; \
+	    if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
+	      $(MAKE_SUB) rebuild-openclaw; \
+	    else \
+	      echo "OpenClaw disabled (OPENCLAW_ENABLED=0): skipping OpenClaw rebuild"; \
+	    fi; \
+	    ;; \
+	esac
+
+.PHONY: rebuild-mc
+rebuild-mc:
 	@cd $(PROJECT_DIR)
 	$(MC_COMPOSE) build --no-cache
-	@$(MAKE) --no-print-directory recreate
+	@$(MAKE_SUB) recreate TARGET_SCOPE=mc
+
+.PHONY: rebuild-openclaw
+rebuild-openclaw: openclaw-build
 
 .PHONY: ps
 ps:  ## Show selected mode container status
@@ -170,7 +264,27 @@ shell:  ## Open interactive shell in selected mode container
 
 .PHONY: status
 status:  ## Show selected mode and endpoint health
-	@echo "Mode:              $(MC_MODE)"
+	@case "$(TARGET_SCOPE)" in \
+	  mc) \
+	    $(MAKE_SUB) status-mc; \
+	    ;; \
+	  openclaw) \
+	    $(MAKE_SUB) openclaw-status; \
+	    ;; \
+	  all) \
+	    $(MAKE_SUB) status-mc; \
+	    if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
+	      echo; \
+	      $(MAKE_SUB) openclaw-status; \
+	    else \
+	      echo "OpenClaw status:   skipped (OPENCLAW_ENABLED=0)"; \
+	    fi; \
+	    ;; \
+	esac
+
+.PHONY: status-mc
+status-mc:
+	@echo "Mode:              $(EFFECTIVE_MC_MODE)"
 	@echo "MC container:      $(MC_CONTAINER)"
 	@echo "OpenClaw enabled:  $(OPENCLAW_ENABLED)"
 	@printf "MC URL:            "; curl -sS -o /dev/null -L -w "%{http_code} → %{url_effective}\n" $(URL) || true
@@ -180,10 +294,6 @@ status:  ## Show selected mode and endpoint health
 	  printf "gemini:            "; docker exec $(MC_CONTAINER) sh -c 'which gemini' 2>&1 | tail -1; \
 	else \
 	  echo "MC CLI checks:     container not running"; \
-	fi
-	@if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
-	  printf "OpenClaw gateway:  "; curl -fsS -o /dev/null -w "%{http_code}\n" "http://$(OPENCLAW_STATUS_HOST):$(OPENCLAW_GATEWAY_PORT)/healthz" 2>&1 || echo "DOWN"; \
-	  printf "OpenClaw control:  "; curl -fsS -o /dev/null -w "%{http_code}\n" "http://$(OPENCLAW_STATUS_HOST):$(OPENCLAW_CONTROL_UI_PORT)/" 2>&1 || echo "DOWN"; \
 	fi
 
 # ── Update workflows ───────────────────────────────────────────────────────
@@ -200,32 +310,57 @@ openclaw-source-update: openclaw-clone  ## [openclaw] Refresh openclaw source on
 	@echo "==> openclaw source refreshed (no rebuild/restart)"
 
 .PHONY: update
-update: repo-update  ## Refresh source/state only (no forced rebuild)
-	@if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
-	  $(MAKE) --no-print-directory openclaw-source-update; \
-	else \
-	  echo "OpenClaw disabled (OPENCLAW_ENABLED=0): skipping openclaw source refresh"; \
-	fi
+update:  ## Refresh source/state only (no forced rebuild)
+	@case "$(TARGET_SCOPE)" in \
+	  mc) \
+	    $(MAKE_SUB) update-mc; \
+	    ;; \
+	  openclaw) \
+	    $(MAKE_SUB) update-openclaw; \
+	    ;; \
+	  all) \
+	    $(MAKE_SUB) update-mc; \
+	    if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
+	      $(MAKE_SUB) update-openclaw; \
+	    else \
+	      echo "OpenClaw disabled (OPENCLAW_ENABLED=0): skipping openclaw source refresh"; \
+	    fi; \
+	    ;; \
+	esac
+
+.PHONY: update-mc
+update-mc: repo-update
+
+.PHONY: update-openclaw
+update-openclaw: openclaw-source-update
 
 .PHONY: upgrade
 upgrade:  ## update + rebuild + restart (+ OpenClaw update path when enabled)
-	@$(MAKE) --no-print-directory update
-	@$(MAKE) --no-print-directory rebuild
-	@$(MAKE) --no-print-directory restart
-	@if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
-	  $(MAKE) --no-print-directory openclaw-update; \
-	fi
+	@case "$(TARGET_SCOPE)" in \
+	  mc) \
+	    $(MAKE_SUB) upgrade-mc; \
+	    ;; \
+	  openclaw) \
+	    $(MAKE_SUB) upgrade-openclaw; \
+	    ;; \
+	  all) \
+	    $(MAKE_SUB) upgrade-mc; \
+	    if [ "$(OPENCLAW_ENABLED)" = "1" ]; then \
+	      $(MAKE_SUB) upgrade-openclaw; \
+	    else \
+	      echo "OpenClaw disabled (OPENCLAW_ENABLED=0): skipping OpenClaw upgrade"; \
+	    fi; \
+	    ;; \
+	esac
 
-.PHONY: update-dev
-update-dev:  ## [compat] Alias for mode-aware dev update
-	@$(MAKE) --no-print-directory update MC_MODE=dev
-
-.PHONY: upgrade-dev
-upgrade-dev:  ## [compat] Alias for mode-aware dev upgrade
-	@$(MAKE) --no-print-directory upgrade MC_MODE=dev
+.PHONY: upgrade-mc
+upgrade-mc:
+	@$(MAKE_SUB) update-mc
+	@$(MAKE_SUB) rebuild-mc
+	@$(MAKE_SUB) mc-restart
 
 .PHONY: upgrade-openclaw
-upgrade-openclaw: openclaw-update  ## [openclaw] Alias for openclaw-update
+upgrade-openclaw: openclaw-update
 
 # ── Lifecycle utilities ────────────────────────────────────────────────────
 .PHONY: wait-ready
@@ -251,49 +386,9 @@ reset-db:  ## Wipe SQLite db (forces /setup again — admin password recovery)
 	  | sed 's/^/   /'
 	@echo
 	@echo "===> 3. Restart"
-	@$(MAKE) --no-print-directory up
+	@$(MAKE_SUB) up
 	@echo
 	@echo "Open $(URL)/setup to create a fresh admin."
-
-# ── Bookkeeping ────────────────────────────────────────────────────────────
-# ── Dev lifecycle (docker-compose-dev.yml) ─────────────────────────────────
-.PHONY: dev-up
-dev-up:  ## [compat] Alias for mode-aware dev up
-	@$(MAKE) --no-print-directory up MC_MODE=dev ARGS="$(ARGS)"
-
-.PHONY: dev
-dev: dev-up  ## [dev] Alias for dev-up
-
-.PHONY: dev-down
-dev-down:  ## [compat] Alias for mode-aware dev down
-	@$(MAKE) --no-print-directory down MC_MODE=dev
-
-.PHONY: dev-restart
-dev-restart:  ## [compat] Alias for mode-aware dev restart
-	@$(MAKE) --no-print-directory restart MC_MODE=dev
-
-.PHONY: dev-build
-dev-build:  ## [dev] Rebuild image (when package.json / Dockerfile.dev changes)
-	@$(MAKE) --no-print-directory build MC_MODE=dev ARGS="$(ARGS)"
-
-.PHONY: dev-rebuild
-dev-rebuild:  ## [dev] Rebuild image (no cache) and recreate
-	@cd $(PROJECT_DIR)
-	$(COMPOSE_DEV) build --no-cache
-	$(COMPOSE_DEV) up -d --force-recreate
-	@$(MAKE) --no-print-directory wait-ready
-
-.PHONY: dev-logs
-dev-logs:  ## [dev] Tail container logs (Ctrl+C to stop)
-	@$(MAKE) --no-print-directory logs MC_MODE=dev
-
-.PHONY: dev-shell
-dev-shell:  ## [dev] Open shell inside container
-	@$(MAKE) --no-print-directory shell MC_MODE=dev
-
-.PHONY: dev-ps
-dev-ps:  ## [dev] Show container status
-	@$(MAKE) --no-print-directory ps MC_MODE=dev
 
 # ─────────────────────────────────────────────────────────────────────────────
 # OpenClaw integration — additive. Brings up the gateway daemon next to MC.
@@ -330,7 +425,7 @@ openclaw-up:  ## Start openclaw gateway + control UI + local auto-pair (ports 18
 	@cd $(PROJECT_DIR)
 	if [ ! -f "$(OPENCLAW_SRC)/dist/index.js" ] || [ ! -f "$(OPENCLAW_SRC)/dist/control-ui/index.html" ]; then \
 	  echo "openclaw dist/control-ui assets missing; building first..."; \
-	  $(MAKE) openclaw-build; \
+	  $(MAKE_SUB) openclaw-build; \
 	fi
 	mkdir -p .openclaw-data/credentials .mc-openclaw/credentials
 	$(COMPOSE_OC) up -d openclaw-gateway openclaw-control-ui openclaw-control-ui-autopair

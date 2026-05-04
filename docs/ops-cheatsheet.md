@@ -9,7 +9,7 @@ MC_MODE=prod            # or dev
 OPENCLAW_ENABLED=1      # set 0 for MC-only lifecycle
 ```
 
-## 2) Primary lifecycle (mode-aware)
+## 2) Primary lifecycle (universal verbs)
 
 ```bash
 make up
@@ -21,48 +21,59 @@ make rebuild
 make upgrade
 ```
 
-## 3) Command matrix (prod/dev via `MC_MODE`)
+## 3) Command grammar
+
+```text
+make <verb> [all|mc|openclaw]
+make -- <verb> [all|mc|openclaw] [--dev|--prod]
+```
+
+- `all` is the default scope.
+- `--dev` / `--prod` overrides `MC_MODE` for a single invocation.
+- GNU Make parses `--dev`/`--prod` as options unless you separate with `make -- ...`.
+
+Examples (requested grammar + executable form):
+
+```bash
+make up --dev                 # grammar
+make -- up --dev              # executable form
+
+make restart mc --prod        # grammar
+make -- restart mc --prod     # executable form
+
+make status openclaw
+```
+
+## 4) Command matrix (scope + mode-aware)
 
 | Intent | Command |
 |---|---|
-| Start selected mode (+ OpenClaw when enabled) | `make up` |
-| Restart selected mode (+ OpenClaw when enabled) | `make restart` |
-| Stop selected mode (+ OpenClaw when enabled) | `make down` |
-| Health/status for selected mode | `make status` |
-| Refresh git/source state only | `make update` |
-| Force no-cache image rebuild + recreate selected mode | `make rebuild` |
-| Full maintenance flow | `make upgrade` |
+| Start selected component(s) | `make up [all|mc|openclaw]` |
+| Restart selected component(s) | `make restart [all|mc|openclaw]` |
+| Stop selected component(s) | `make down [all|mc|openclaw]` |
+| Health/status for selected component(s) | `make status [all|mc|openclaw]` |
+| Refresh source/state only for selected component(s) | `make update [all|mc|openclaw]` |
+| Force rebuild selected component(s) | `make rebuild [all|mc|openclaw]` |
+| Full maintenance flow for selected component(s) | `make upgrade [all|mc|openclaw]` |
 
 Mode override examples:
 
 ```bash
-MC_MODE=prod OPENCLAW_ENABLED=1 make upgrade
-MC_MODE=dev  OPENCLAW_ENABLED=0 make rebuild
+make -- up --dev
+make -- restart mc --prod
 ```
 
-## 4) `update` vs `upgrade`
+## 5) `update` vs `upgrade`
 
-- `make update` = **source/state refresh only**
+- `make update [scope]` = **source/state refresh only**
   - Fast-forward current branch from origin
   - Refresh OpenClaw source when `OPENCLAW_ENABLED=1`
   - **No forced MC image rebuild** and **no forced restart**
 
-- `make upgrade` = **`update` + `rebuild` + `restart`**
-  - Runs `make update`
-  - Runs `make rebuild` (no-cache MC image rebuild + recreate)
-  - Runs `make restart`
-  - When `OPENCLAW_ENABLED=1`, also runs OpenClaw update path (`make openclaw-update`: source refresh + dist rebuild + gateway restart)
-
-## 5) Compatibility aliases (optional)
-
-```bash
-make dev-up
-make dev-restart
-make dev-down
-make dev-ps
-make update-dev
-make upgrade-dev
-```
+- `make upgrade [scope]` = **`update` + `rebuild` + `restart`** for the selected scope
+  - `scope=mc`: MC-only update/rebuild/restart
+  - `scope=openclaw`: OpenClaw source/build/restart
+  - `scope=all` (default): both; OpenClaw path runs only when `OPENCLAW_ENABLED=1`
 
 ## 6) OpenClaw lifecycle (direct commands)
 

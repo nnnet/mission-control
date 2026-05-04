@@ -83,7 +83,7 @@ Preferred operator flow (Make controls docker compose):
 #    MC_MODE=prod   # or dev
 #    OPENCLAW_ENABLED=1   # set 0 to run MC without OpenClaw stack
 
-# 2) run the same commands in both modes
+# 2) run universal verbs
 make up
 make restart
 make down
@@ -98,42 +98,55 @@ Use `.env` + `.env.openclaw` as the single source of truth for mode/host/port/to
 
 - `MC_MODE=prod` → `docker-compose.yml`
 - `MC_MODE=dev` → `docker-compose-dev.yml`
-- `OPENCLAW_ENABLED=1` → `make up/restart/down` also manages OpenClaw
-- `OPENCLAW_ENABLED=0` → MC stack only
+- `OPENCLAW_ENABLED=1` → `make <verb> all` includes OpenClaw
+- `OPENCLAW_ENABLED=0` → `make <verb> all` manages MC only
+
+Command grammar:
+
+```text
+make <verb> [all|mc|openclaw]
+make -- <verb> [all|mc|openclaw] [--dev|--prod]
+```
+
+- `all` is default scope.
+- `--dev` / `--prod` override `MC_MODE` for one command invocation.
+- GNU Make requires `make -- ...` when passing `--dev`/`--prod` as goals.
 
 Primary operator commands:
 
 | Workflow | Command |
 |---|---|
-| Start selected mode (+ OpenClaw when enabled) | `make up` |
-| Restart selected mode (+ OpenClaw when enabled) | `make restart` |
-| Stop selected mode (+ OpenClaw when enabled) | `make down` |
-| Mode + endpoint health summary | `make status` |
-| Refresh source/state only (no forced rebuild) | `make update` |
-| Force no-cache MC image rebuild + recreate | `make rebuild` |
-| Full maintenance (`update` + `rebuild` + `restart`) | `make upgrade` |
+| Start selected component(s) | `make up [all|mc|openclaw]` |
+| Restart selected component(s) | `make restart [all|mc|openclaw]` |
+| Stop selected component(s) | `make down [all|mc|openclaw]` |
+| Mode + endpoint health summary | `make status [all|mc|openclaw]` |
+| Refresh source/state only | `make update [all|mc|openclaw]` |
+| Force rebuild selected component(s) | `make rebuild [all|mc|openclaw]` |
+| Full maintenance (`update` + `rebuild` + `restart`) | `make upgrade [all|mc|openclaw]` |
 
 Mode override examples:
 
 ```bash
-MC_MODE=prod OPENCLAW_ENABLED=1 make upgrade
-MC_MODE=dev OPENCLAW_ENABLED=0 make rebuild
+make up --dev
+make -- up --dev
+make restart mc --prod
+make -- restart mc --prod
+make status openclaw
 ```
 
 ### `update` vs `upgrade`
 
-- `make update`
+- `make update [scope]`
   - Fast-forwards the current Mission Control branch from origin.
-  - If `OPENCLAW_ENABLED=1`, also refreshes OpenClaw source state.
+  - For `scope=all`, if `OPENCLAW_ENABLED=1`, also refreshes OpenClaw source state.
+  - For `scope=openclaw`, refreshes OpenClaw source state regardless of `OPENCLAW_ENABLED`.
   - Does **not** force an MC image rebuild and does **not** force restart.
 
-- `make upgrade`
-  - Runs `make update`.
-  - Runs `make rebuild` (no-cache MC build + recreate selected mode).
-  - Runs `make restart`.
-  - If `OPENCLAW_ENABLED=1`, also runs OpenClaw update path (`make openclaw-update`: source refresh + dist rebuild + gateway restart).
-
-Compatibility aliases still exist (`make dev-up`, `make dev-restart`, `make dev-down`, `make dev-ps`, `make update-dev`, `make upgrade-dev`) but are optional.
+- `make upgrade [scope]`
+  - Runs update + rebuild + restart for selected scope.
+  - `scope=mc`: MC-only flow.
+  - `scope=openclaw`: OpenClaw update flow (`make openclaw-update`).
+  - `scope=all`: both flows; OpenClaw path runs when `OPENCLAW_ENABLED=1`.
 
 Minimum `.env` / `.env.openclaw` keys for this flow:
 

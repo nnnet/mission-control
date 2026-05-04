@@ -22,8 +22,8 @@
 - Added explicit credential-dir bootstrap for both state roots (`.openclaw-data/credentials` and `.mc-openclaw/credentials`) to remove OAuth-dir absence noise.
 - Added separate OpenClaw Control UI container (`mc-openclaw-control-ui`) serving `openclaw-src/dist/control-ui` on dedicated host port `OPENCLAW_CONTROL_UI_PORT` (default `18791`).
 - Added local-only Control UI device auto-approval sidecar (`mc-openclaw-control-ui-autopair`) that watches pending pair requests and auto-approves only local Docker Control UI requests (`clientId=openclaw-control-ui`, private/loopback IP, `gateway.mode=local`).
-- Standardized Make lifecycle naming by mode: prod uses `up/down/restart`; dev uses `dev-up/dev-down/dev-restart` with `dev` as alias to `dev-up`.
-- Added explicit update workflows for fast-moving MC/OpenClaw versions (`upgrade`, `upgrade-dev`, `openclaw-update`, `upgrade-openclaw`) and mode-specific help text.
+- Standardized Make lifecycle UX to universal verbs (`up/down/restart/status/update/rebuild/upgrade`) with optional scope selectors (`all|mc|openclaw`) instead of mode-specific target names.
+- Added explicit scope-aware update workflows for fast-moving MC/OpenClaw versions (`update`, `rebuild`, `upgrade`, `openclaw-update`) and flag-based mode overrides (`--dev`, `--prod`).
 
 ## Notes
 *Additional context and observations*
@@ -223,6 +223,13 @@
 - `docs/ops-cheatsheet.md` / `docs/deployment.md`
   - Added concise mode-aware command matrix for lifecycle + maintenance commands.
   - Added explicit `update` vs `upgrade` semantics and aligned examples with current Makefile behavior.
+- `Makefile`
+  - Redesigned top-level UX to universal verbs only (`up/down/restart/status/update/rebuild/upgrade`) with component selectors (`all|mc|openclaw`) parsed from positional goals.
+  - Removed legacy dev-specific target surface (`dev-up/dev-down/dev-restart/dev-ps/dev-*`, `update-dev`, `upgrade-dev`) from command interface.
+  - Added one-shot mode override flags (`--dev`, `--prod`) with precedence over `.env` `MC_MODE`, exposed via `EFFECTIVE_MC_MODE`.
+  - Added no-op selector/mode pseudo-targets so scoped invocations avoid unknown-target errors.
+- `docs/ops-cheatsheet.md` / `docs/deployment.md`
+  - Updated docs to include universal command grammar, scope examples (`make status openclaw`), and mode-flag examples (`make up --dev`, `make restart mc --prod`) with executable GNU Make form (`make -- ...`).
 
 ## Verify
 <!-- beads-phase-id: TBD -->
@@ -257,6 +264,21 @@
 
 5. `docker exec mission-control openclaw gateway call health --json --timeout 8000`
    - Completed successfully (JSON payload with `"ok": true`).
+
+6. `make help`
+   - Confirmed help output now documents universal verbs, scope selectors, and mode flag overrides.
+
+7. `make status`
+   - Completed successfully with default `all` scope status path.
+
+8. `make status openclaw`
+   - Completed successfully (OpenClaw-only health summary).
+
+9. `make -- up mc --dev`
+   - Completed successfully; effective mode resolved to `dev` via CLI flag override.
+
+10. `make -- restart --prod`
+    - Completed successfully; effective mode resolved to `prod` via CLI flag override.
 
 6. Additional checks
    - `curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:18791/` -> `200` (dedicated control UI port live).
