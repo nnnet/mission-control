@@ -20,6 +20,52 @@
 #                           evoscientist).
 
 services:
+  # One-shot bootstrap — clones the sibling repos that the rest of the
+  # stack bind-mounts, and seeds EvoScientist's `.env` from the main MC
+  # `OPENAI_API_KEY`. Run via:
+  #   docker compose -f docker-compose-evoscientist.yml --profile bootstrap \
+  #     run --rm evoscientist-bootstrap
+  # After that, `make up` (or `docker compose ... up -d`) brings up the
+  # full stack. Idempotent: skips clones that already exist.
+  evoscientist-bootstrap:
+    image: alpine/git:latest
+    profiles: ["bootstrap"]
+    container_name: evoscientist-bootstrap
+    working_dir: /workdir
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - .:/workdir:rw
+    entrypoint: ["sh", "-c"]
+    command: |
+      set -e
+      if [ ! -d EvoScientist-src/.git ]; then
+        echo "==> cloning EvoScientist"
+        git clone --depth 1 https://github.com/EvoScientist/EvoScientist.git EvoScientist-src
+      else
+        echo "==> EvoScientist-src present, skipping clone"
+      fi
+      if [ ! -d agent-chat-ui-src/.git ]; then
+        echo "==> cloning agent-chat-ui"
+        git clone --depth 1 https://github.com/langchain-ai/agent-chat-ui.git agent-chat-ui-src
+      else
+        echo "==> agent-chat-ui-src present, skipping clone"
+      fi
+      mkdir -p EvoScientist-src/workspace
+      if [ ! -f EvoScientist-src/.env ]; then
+        echo "==> seeding EvoScientist-src/.env from OPENAI_API_KEY"
+        cp EvoScientist-src/.env.example EvoScientist-src/.env
+        if [ -n "$$OPENAI_API_KEY" ]; then
+          sed -i "s|^OPENAI_API_KEY=.*$$|OPENAI_API_KEY=$$OPENAI_API_KEY|" EvoScientist-src/.env
+          echo "==> wrote OPENAI_API_KEY to EvoScientist-src/.env"
+        else
+          echo "==> WARN: OPENAI_API_KEY not set in shell env; edit EvoScientist-src/.env manually"
+        fi
+      else
+        echo "==> EvoScientist-src/.env present, skipping seed"
+      fi
+      echo "==> bootstrap complete"
+
   evoscientist:
     image: ghcr.io/evoscientist/evoscientist:latest
     container_name: evoscientist
