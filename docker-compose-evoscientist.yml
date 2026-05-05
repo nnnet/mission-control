@@ -84,5 +84,45 @@ services:
     group_add:
       - "${DOCKER_SOCKET_GID:-994}"
 
+  # LangGraph Studio dev server — exposes EvoScientist's main agent +
+  # writing-agent + data-analysis-agent as a graph so https://smith.langchain.com
+  # /studio/?baseUrl=http://127.0.0.1:2024 can render the live state machine
+  # (nodes per sub-agent, edges = transitions). Pure observability — uses
+  # the same image and volume as the interactive `evoscientist` sidecar so
+  # both share sessions/memory/skills.
+  #
+  # The langgraph.json registry shipped inside the package lives at
+  # /opt/venv/lib/python3.11/site-packages/EvoScientist/langgraph_dev/.
+  # `langgraph dev` reads it from the working dir.
+  evoscientist-studio:
+    image: ghcr.io/evoscientist/evoscientist:latest
+    container_name: evoscientist-studio
+    init: true
+    restart: unless-stopped
+    user: root
+    env_file:
+      - path: ./EvoScientist-src/.env
+        required: false
+    ports:
+      - "${EVOSCIENTIST_STUDIO_PORT:-2024}:2024"
+    volumes:
+      - evoscientist-data:/home/evosci/.evoscientist
+    working_dir: /opt/venv/lib/python3.11/site-packages/EvoScientist/langgraph_dev
+    entrypoint:
+      - "langgraph"
+      - "dev"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "2024"
+      - "--no-browser"
+      - "--allow-blocking"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:2024/ok\", timeout=2)' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
 volumes:
   evoscientist-data:
