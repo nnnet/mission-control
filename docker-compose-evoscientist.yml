@@ -1,0 +1,78 @@
+# EvoScientist sidecar + Mission Control bridge — additive, optional.
+#
+# Bring up alongside the main MC stack:
+#   docker compose -f docker-compose-dev.yml \
+#     -f docker-compose-openclaw.yml \
+#     -f docker-compose-evoscientist.yml up -d
+#
+# Architecture:
+#   evoscientist          — third-party agent framework (interactive CLI),
+#                           image pulled from upstream; .env keys at
+#                           ./EvoScientist-src/.env (sibling repo clone,
+#                           gitignored). Restricted to OPENAI provider
+#                           with gpt-5-nano as primary, gpt-4o-mini as
+#                           fallback per project cost guidance.
+#   evoscientist-bridge   — our tiny FastAPI poller that registers itself
+#                           as MC agent(s) and ferries tasks from MC's
+#                           task queue into EvoScientist. See
+#                           ./evoscientist-bridge/bridge.py for the
+#                           three execution modes (stub / openai /
+#                           evoscientist).
+
+services:
+  evoscientist:
+    image: ghcr.io/evoscientist/evoscientist:latest
+    container_name: evoscientist
+    init: true
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    env_file:
+      - path: ./EvoScientist-src/.env
+        required: false
+    volumes:
+      - ./EvoScientist-src/workspace:/workspace
+      - evoscientist-data:/home/evosci/.evoscientist
+    healthcheck:
+      test: ["CMD-SHELL", "echo ok"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  evoscientist-bridge:
+    build:
+      context: ./evoscientist-bridge
+      dockerfile: Dockerfile
+    image: evoscientist-bridge:local
+    container_name: evoscientist-bridge
+    init: true
+    restart: unless-stopped
+    depends_on:
+      evoscientist:
+        condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${EVOSCIENTIST_BRIDGE_PORT:-7920}:7920"
+    environment:
+      MC_URL: ${MC_URL:-http://host.docker.internal:7012}
+      MC_API_KEY: ${MC_API_KEY:-}
+      EVOSCIENTIST_CONTAINER: evoscientist
+      EVOSCIENTIST_PRIMARY_MODEL: ${EVOSCIENTIST_PRIMARY_MODEL:-gpt-5-nano}
+      EVOSCIENTIST_FALLBACK_MODEL: ${EVOSCIENTIST_FALLBACK_MODEL:-gpt-4o-mini}
+      EVOSCIENTIST_SUBAGENTS: ${EVOSCIENTIST_SUBAGENTS:-}
+      ORCHESTRATOR_AGENT_NAME: ${ORCHESTRATOR_AGENT_NAME:-evoscientist-orchestrator}
+      MODE: ${EVOSCIENTIST_BRIDGE_MODE:-openai}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      POLL_INTERVAL_SECONDS: ${EVOSCIENTIST_POLL_SECONDS:-5}
+      TASK_TIMEOUT_SECONDS: ${EVOSCIENTIST_TASK_TIMEOUT_SECONDS:-600}
+      LOG_LEVEL: ${EVOSCIENTIST_LOG_LEVEL:-INFO}
+    volumes:
+      # docker socket so the bridge can `docker exec evoscientist …`
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+    group_add:
+      - "${DOCKER_SOCKET_GID:-994}"
+
+volumes:
+  evoscientist-data:
