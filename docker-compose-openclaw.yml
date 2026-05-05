@@ -71,14 +71,10 @@ services:
       HOME: /home/node
       TERM: xterm-256color
       TZ: ${OPENCLAW_TZ:-UTC}
-      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      TELEGRAM_NUMERIC_USER_ID: ${TELEGRAM_NUMERIC_USER_ID:-}
-      TELEGRAM_DM_POLICY: ${TELEGRAM_DM_POLICY:-}
-      TELEGRAM_ALLOW_FROM: ${TELEGRAM_ALLOW_FROM:-}
-      TELEGRAM_OWNER_ALLOW_FROM: ${TELEGRAM_OWNER_ALLOW_FROM:-}
+      # OPENCLAW_GATEWAY_TOKEN, OPENCLAW_TOOLS_PROFILE, TELEGRAM_* — comes from
+      # env_file below. Do NOT redeclare here as `${VAR:-}`: that empty fallback
+      # would OVERWRITE the env_file value (compose: environment > env_file).
       DOCKER_SOCKET_GID: ${DOCKER_SOCKET_GID:-}
-      OPENCLAW_TOOLS_PROFILE: ${OPENCLAW_TOOLS_PROFILE:-coding}
       OPENCLAW_SECURITY_WORKSPACE_ONLY: ${OPENCLAW_SECURITY_WORKSPACE_ONLY:-1}
       OPENCLAW_SECURITY_DENY_AUTOMATION: ${OPENCLAW_SECURITY_DENY_AUTOMATION:-1}
       OPENCLAW_SECURITY_DENY_RUNTIME: ${OPENCLAW_SECURITY_DENY_RUNTIME:-1}
@@ -86,12 +82,13 @@ services:
       OPENCLAW_SECURITY_SANDBOX_ALL: ${OPENCLAW_SECURITY_SANDBOX_ALL:-1}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
       OPENCLAW_DISABLE_BONJOUR: ${OPENCLAW_DISABLE_BONJOUR:-1}
-      # Plugin runtime stage dir lives under bind-mounted state so it inherits
-      # host permissions and survives container recreate. Avoid the default
-      # /var/lib/openclaw/* path because Docker named volumes are root-owned
-      # and our container runs as uid 0 for sandboxing.
-      OPENCLAW_PLUGIN_STAGE_DIR: /home/node/.openclaw/plugin-runtime-deps
-      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      # Path-equivalence: state dir absolute path matches the host. Required so
+      # gateway-issued docker bind-mounts for sandbox containers find their
+      # source paths on the host (otherwise docker silently mounts an empty
+      # dir and skills/AGENTS.md aren't visible inside /workspace).
+      OPENCLAW_STATE_DIR: /mnt/9/gt/rig_PlatformsAI/mayor/rig/beads/discovered/mission-control/.openclaw-data
+      OPENCLAW_PLUGIN_STAGE_DIR: /mnt/9/gt/rig_PlatformsAI/mayor/rig/beads/discovered/mission-control/.openclaw-data/plugin-runtime-deps
+      OPENCLAW_CONFIG_PATH: /mnt/9/gt/rig_PlatformsAI/mayor/rig/beads/discovered/mission-control/.openclaw-data/openclaw.json
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
@@ -111,9 +108,16 @@ services:
       # Application code — bind-mounted from the host clone. Update via
       # `make openclaw-update`; restart container to pick up new dist.
       - ./openclaw-src:/app:rw
-      # Persistent gateway state (openclaw.json, sessions DB, workspace,
-      # plugin-runtime-deps stage). All under one bind-mount so ownership
-      # is consistent.
+      # Persistent gateway state — bind-mounted on the SAME absolute path the
+      # host has. Critical for sandbox creation: when gateway asks the host's
+      # docker daemon to mount `${state}/sandboxes/agent-X:/workspace`, the
+      # source path must exist on the host. With path equivalence the source
+      # `/mnt/9/.../.openclaw-data/sandboxes/...` resolves identically here
+      # and on the host, so /workspace receives the real skills + AGENTS.md.
+      - ./.openclaw-data:/mnt/9/gt/rig_PlatformsAI/mayor/rig/beads/discovered/mission-control/.openclaw-data
+      # Legacy alias: keep the old `~/.openclaw` location reachable as a
+      # symlink so any code that still hard-codes the home-relative path
+      # finds the same data. (See entrypoint shim below.)
       - ./.openclaw-data:/home/node/.openclaw
       # Docker socket required for sandbox tool runtime access (env-driven).
       - /var/run/docker.sock:/var/run/docker.sock:rw
@@ -421,14 +425,10 @@ services:
       TERM: xterm-256color
       TZ: ${OPENCLAW_TZ:-UTC}
       BROWSER: echo
-      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      TELEGRAM_NUMERIC_USER_ID: ${TELEGRAM_NUMERIC_USER_ID:-}
-      TELEGRAM_DM_POLICY: ${TELEGRAM_DM_POLICY:-}
-      TELEGRAM_ALLOW_FROM: ${TELEGRAM_ALLOW_FROM:-}
-      TELEGRAM_OWNER_ALLOW_FROM: ${TELEGRAM_OWNER_ALLOW_FROM:-}
+      # OPENCLAW_GATEWAY_TOKEN, OPENCLAW_TOOLS_PROFILE, TELEGRAM_* — comes from
+      # env_file. Do NOT redeclare here as `${VAR:-}`: empty fallback overwrites
+      # env_file value (compose: environment > env_file).
       DOCKER_SOCKET_GID: ${DOCKER_SOCKET_GID:-}
-      OPENCLAW_TOOLS_PROFILE: ${OPENCLAW_TOOLS_PROFILE:-coding}
       OPENCLAW_SECURITY_WORKSPACE_ONLY: ${OPENCLAW_SECURITY_WORKSPACE_ONLY:-1}
       OPENCLAW_SECURITY_DENY_AUTOMATION: ${OPENCLAW_SECURITY_DENY_AUTOMATION:-1}
       OPENCLAW_SECURITY_DENY_RUNTIME: ${OPENCLAW_SECURITY_DENY_RUNTIME:-1}
