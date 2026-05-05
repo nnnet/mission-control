@@ -185,7 +185,9 @@ async def run_openai(prompt: str) -> str:
                     },
                     {"role": "user", "content": prompt},
                 ],
-                "max_tokens": 1024,
+                # gpt-5* family rejects `max_tokens`; both gpt-5-nano and
+                # gpt-4o-mini accept `max_completion_tokens`.
+                "max_completion_tokens": 1024,
             },
         )
         if r.status_code != 200:
