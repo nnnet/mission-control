@@ -57,11 +57,18 @@ services:
       - "${EVOSCIENTIST_BRIDGE_PORT:-7920}:7920"
     environment:
       MC_URL: ${MC_URL:-http://host.docker.internal:7012}
-      MC_API_KEY: ${MC_API_KEY:-}
+      # MC's auth.ts reads `process.env.API_KEY`. Same value is forwarded
+      # to the bridge as MC_API_KEY (used as Bearer header). Set API_KEY
+      # in `.env` once; both MC and the bridge read it from there.
+      MC_API_KEY: ${API_KEY:-${MC_API_KEY:-}}
       EVOSCIENTIST_CONTAINER: evoscientist
       EVOSCIENTIST_PRIMARY_MODEL: ${EVOSCIENTIST_PRIMARY_MODEL:-gpt-5-nano}
       EVOSCIENTIST_FALLBACK_MODEL: ${EVOSCIENTIST_FALLBACK_MODEL:-gpt-4o-mini}
-      EVOSCIENTIST_SUBAGENTS: ${EVOSCIENTIST_SUBAGENTS:-}
+      # Sub-agents enumerated from EvoScientist-src/EvoScientist/subagents/
+      # (each *.yaml is one specialised agent loaded by _factory.py).
+      # Override with `EVOSCIENTIST_SUBAGENTS=` to register only the
+      # orchestrator, or list a custom subset.
+      EVOSCIENTIST_SUBAGENTS: ${EVOSCIENTIST_SUBAGENTS:-evoscientist-code,evoscientist-research,evoscientist-data-analysis,evoscientist-debug,evoscientist-planner,evoscientist-writing}
       ORCHESTRATOR_AGENT_NAME: ${ORCHESTRATOR_AGENT_NAME:-evoscientist-orchestrator}
       MODE: ${EVOSCIENTIST_BRIDGE_MODE:-openai}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
