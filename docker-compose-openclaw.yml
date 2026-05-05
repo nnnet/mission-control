@@ -522,6 +522,83 @@ services:
       - ./.openclaw-data:/app/.openclaw-data:rw
     entrypoint: ["node", "scripts/openclaw-auto-approve-control-ui.mjs", "--watch"]
 
+  # ── GPU-Coordinator Proxy (LMStudio + Ollama) ────────────────────────────
+  # NOT part of MC — it's an independent microservice from a sibling repo:
+  #   github.com/nnnet/gpu-coordinator-proxy
+  #   ./gpu-coordinator-proxy-src/  (cloned from github sibling repo)
+  #
+  # Fronts both local LLM runtimes on separate ports with a shared VRAM lock.
+  # Before forwarding to either backend it unloads all models from the OTHER
+  # backend so a 20B-class model in one runtime doesn't fight with a 20B in
+  # the other on a 24 GB GPU.
+  #
+  #   :1235   → LMStudio (http://host.docker.internal:1234)
+  #   :11435  → Ollama   (http://host.docker.internal:11434)
+  #
+  # OpenClaw and MC point lmstudio.baseUrl at :1235 and ollama.baseUrl at
+  # :11435; Ollama itself still exposes :11434 for direct access.
+  #
+  # If the sibling clone is missing, comment out this whole service block —
+  # MC will keep working, you just lose cross-runtime swap protection.
+  gpu-coordinator-proxy:
+    build:
+      context: ./gpu-coordinator-proxy-src
+      dockerfile: Dockerfile
+    image: gpu-coordinator-proxy:local
+    container_name: mc-gpu-coordinator-proxy
+    init: true
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${LMSTUDIO_PROXY_LISTEN_PORT:-1235}:1235"
+      - "${OLLAMA_PROXY_LISTEN_PORT:-11435}:11435"
+    environment:
+      # Real LLM runtime URLs (the proxy talks to these on behalf of clients).
+      LMSTUDIO_UPSTREAM: ${LMSTUDIO_UPSTREAM:-http://host.docker.internal:1234}
+      OLLAMA_UPSTREAM:   ${OLLAMA_UPSTREAM:-http://host.docker.internal:11434}
+      # Master switch — when 0/false the proxy is pure pass-through (no
+      # eviction). Default 1.
+      GPU_AUTO_FREE_ENABLED: ${GPU_AUTO_FREE_ENABLED:-1}
+      # Eviction strategy:
+      #   spare-target (default) — keep the requested model warm; only unload
+      #     OTHER models across both runtimes. Cheapest, no cold reload.
+      #   wipe-all               — unload everything in both runtimes (incl.
+      #     the requested target). JIT reloads target from disk every call.
+      #     +5–15s/request, but recovers from any stuck VRAM state. Requires
+      #     GPU_WIPE_ALL_ALLOWED=1 to actually engage.
+      GPU_FREE_STRATEGY: ${GPU_FREE_STRATEGY:-spare-target}
+      # Safety gate for wipe-all. Default OFF: requests for wipe-all silently
+      # downgrade to spare-target unless this is explicitly enabled.
+      GPU_WIPE_ALL_ALLOWED: ${GPU_WIPE_ALL_ALLOWED:-0}
+      # Settle pause after eviction (ms) before forwarding the request, so
+      # the GPU driver can actually reclaim VRAM before the next load.
+      GPU_FREE_SETTLE_MS: ${GPU_FREE_SETTLE_MS:-800}
+      REQUEST_TIMEOUT_SECONDS: ${GPU_PROXY_REQUEST_TIMEOUT:-600}
+
+  # ── Ollama (alternative local LLM runtime) ─────────────────────────────────
+  # Provides an OpenAI-compatible chat completions endpoint on :11434/v1.
+  # Models are stored in a named volume so they survive container recreate.
+  # Pull a model after first start: `docker exec mc-ollama ollama pull <model>`.
+  ollama:
+    image: ollama/ollama:latest
+    container_name: mc-ollama
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    environment:
+      OLLAMA_HOST: "0.0.0.0:11434"
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-5m}
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
 volumes:
   openclaw-pnpm-store:
   openclaw-bun-cache:
+  ollama-models:
