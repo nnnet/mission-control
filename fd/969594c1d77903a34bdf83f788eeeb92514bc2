@@ -1,0 +1,25 @@
+evoscientist-bridge/bridge.py
+  8b507b7b76f0f9b5 78-132,268-270,273-274,282,284-285,287-291,299-377,429-441,448-471,474,494,498-506,543-545
+docker-compose-evoscientist.yml
+  8b507b7b76f0f9b5 75-78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "fd969594c1d77903a34bdf83f788eeeb92514bc2",
+  "prompts": {
+    "8b507b7b76f0f9b5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1d567882-42f6-4213-952f-f87e0c87ccc7",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "nnnet",
+      "messages": [],
+      "total_additions": 239,
+      "total_deletions": 18,
+      "accepted_lines": 237,
+      "overriden_lines": 0
+    }
+  }
+}
