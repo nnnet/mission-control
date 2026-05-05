@@ -1,0 +1,33 @@
+src/app/api/sessions/route.ts
+  8b507b7b76f0f9b5 13-16
+src/proxy.ts
+  8b507b7b76f0f9b5 100-101
+src/lib/claude-sessions.ts
+  8b507b7b76f0f9b5 34-38,87-91,95-101,328,343-356,361-364
+src/components/chat/chat-workspace.tsx
+  8b507b7b76f0f9b5 116-127,584,621-623,633,639-642,804-806,808
+src/app/layout.tsx
+  8b507b7b76f0f9b5 95-97,118
+src/app/api/sessions/continue/route.ts
+  8b507b7b76f0f9b5 1,3,10-102,105-128,133-159,163-169,194-241,243-263
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "1f6ab46886cf7f832a6743228084655fb3cc7fd0",
+  "prompts": {
+    "8b507b7b76f0f9b5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1d567882-42f6-4213-952f-f87e0c87ccc7",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "nnnet",
+      "messages": [],
+      "total_additions": 293,
+      "total_deletions": 27,
+      "accepted_lines": 293,
+      "overriden_lines": 0
+    }
+  }
+}
