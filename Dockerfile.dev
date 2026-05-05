@@ -7,9 +7,12 @@ FROM node:22.22.0-slim
 RUN corepack enable && corepack prepare pnpm@latest --activate
 WORKDIR /app
 
-# OS deps: better-sqlite3 build tools, agent-runtime probes, /chat PTY.
+# OS deps: better-sqlite3 build tools, agent-runtime probes, /chat PTY,
+# docker CLI (talks to host daemon via bind-mounted /var/run/docker.sock —
+# required so `openclaw doctor` can verify sandbox readiness without
+# emitting the "Docker is not available" warning to the Doctor panel).
 RUN apt-get update && apt-get upgrade && apt-get install -y \
-      curl ca-certificates python3 git make g++ procps tmux jq \
+      curl ca-certificates python3 git make g++ procps tmux jq docker.io \
       --no-install-recommends && rm -rf /var/lib/apt/lists/*
 
 # Bake claude / codex CLIs as a fallback. The host's ~/.local/bin still wins

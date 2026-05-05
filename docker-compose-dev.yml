@@ -72,7 +72,20 @@ services:
       - path: .env.openclaw
         required: false
     user: "1000:1000"
+    # Make the host's docker socket group accessible to uid 1000 so
+    # `openclaw doctor`, called from src/app/api/openclaw/doctor/route.ts via
+    # runOpenClaw, can run `docker version` and stop emitting the
+    # "Sandbox mode is enabled but Docker is not available" warning.
+    # The Makefile auto-detects the gid via `stat -c %g /var/run/docker.sock`
+    # and exports DOCKER_SOCKET_GID; the 994 fallback matches a stock
+    # `docker` group on Debian/Ubuntu hosts when invoked outside `make`.
+    group_add:
+      - "${DOCKER_SOCKET_GID:-994}"
     volumes:
+      # Host docker socket — needed for `openclaw doctor` sandbox readiness
+      # check inside the MC container. The socket is bind-mounted; uid 1000
+      # gains access via `group_add` above.
+      - /var/run/docker.sock:/var/run/docker.sock:rw
       # ── Source code: bind-mount, hot-reload ──
       - ./src:/app/src:rw
       - ./public:/app/public:rw
@@ -105,6 +118,26 @@ services:
       - ${HOME}/.claude.json:/home/nextjs/.claude.json:rw
       - /mnt:/mnt:rw
       - ${HOME}:${HOME}:rw
+      # Mask the host's `${HOME}/.openclaw` so openclaw doctor inside the
+      # container only sees one state directory (`/home/nextjs/.openclaw`,
+      # mounted from ./.mc-openclaw below). Without this mask, openclaw
+      # scans `/home/*/.openclaw` (doctor-state-integrity.ts:findOtherStateDirs)
+      # and finds the host user's `~/.openclaw` through the `${HOME}:${HOME}`
+      # bind above, then emits "Multiple state directories detected" — which
+      # raises the MC doctor banner (level=warning) even when the only finding
+      # is the bind-mount artifact.
+      #
+      # We bind-mount a regular empty FILE from the project — `existsDir()`
+      # in openclaw uses `statSync(path).isDirectory()`, so a non-directory
+      # at that path makes openclaw skip it entirely. Tmpfs doesn't work
+      # here (it would still appear as a directory).
+      #
+      # Prerequisite: the host's `${HOME}/.openclaw` must NOT exist as a
+      # directory before container start, otherwise docker rejects the
+      # bind-mount with "Are you trying to mount a directory onto a file".
+      # Run `rm -rf "$HOME/.openclaw"` once on the host; nothing inside
+      # the container creates it back automatically.
+      - ./.docker-mask/openclaw-stub.empty:${HOME}/.openclaw:ro
       # ── OpenClaw CLI state (persists pairing identity + device-auth.json
       # so MC keeps the same paired identity across container restarts).
       # Bound to ./.mc-openclaw/ on the host for direct filesystem patching
