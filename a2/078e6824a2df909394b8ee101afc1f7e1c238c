@@ -1,0 +1,23 @@
+docker-compose-evoscientist.yml
+  8b507b7b76f0f9b5 87-126
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "a2078e6824a2df909394b8ee101afc1f7e1c238c",
+  "prompts": {
+    "8b507b7b76f0f9b5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1d567882-42f6-4213-952f-f87e0c87ccc7",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "nnnet",
+      "messages": [],
+      "total_additions": 40,
+      "total_deletions": 0,
+      "accepted_lines": 75,
+      "overriden_lines": 0
+    }
+  }
+}
