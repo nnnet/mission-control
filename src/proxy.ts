@@ -97,6 +97,8 @@ function nextResponseWithNonce(request: NextRequest): { response: NextResponse; 
       headers: requestHeaders,
     },
   })
+  // Debug log retained (commented) for future CSP/nonce flow troubleshooting.
+  // console.log(`[DEBUG csp] proxy generated nonce for ${request.nextUrl.pathname}: ${nonce.slice(0, 8)}...`)
   return { response, nonce }
 }
 
