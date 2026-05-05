@@ -75,6 +75,61 @@ SUBAGENT_NAMES = [
 ALL_AGENT_NAMES = [ORCHESTRATOR_AGENT_NAME, *SUBAGENT_NAMES]
 
 
+# Per-subagent system prompts, drawn from EvoScientist/subagents/*.yaml
+# `description` and `system_prompt` fields. We embed them rather than
+# bind-mounting the yaml so the bridge stays standalone.
+SUBAGENT_SYSTEM_PROMPTS = {
+    "planner": (
+        "You are the planner-agent. You do NOT implement code. "
+        "Decompose the user's task into a numbered plan of stages. "
+        "For each stage list: goal, success signals, what to run "
+        "(commands at high level), expected artefacts. List dependencies. "
+        "Stay short and concrete."
+    ),
+    "research": (
+        "You are the research-agent. Web research for "
+        "methods/baselines/datasets/facts. Return actionable notes plus "
+        "sources you would consult. Stay focused on one topic at a time."
+    ),
+    "code": (
+        "You are the code-agent. Implement experiment code and runnable "
+        "scripts. Keep changes minimal and reproducible. Prefer concise "
+        "snippets to long monoliths."
+    ),
+    "data-analysis": (
+        "You are the data-analysis-agent. Analyse experiment outputs: "
+        "compute metrics, suggest plots, summarise insights. Stay numeric "
+        "and concrete; cite specific values when possible."
+    ),
+    "debug": (
+        "You are the debug-agent. Diagnose runtime failures and propose "
+        "minimal, verifiable patches. Quote the suspect line(s) and "
+        "explain why they fail before suggesting a fix."
+    ),
+    "writing": (
+        "You are the writing-agent. Synthesise upstream outputs into a "
+        "paper-ready Markdown report. Do NOT fabricate results or "
+        "citations. Keep each section short and specific."
+    ),
+}
+
+ORCHESTRATOR_SYSTEM_PROMPT = (
+    "You are the EvoScientist orchestrator. Your team consists of six "
+    "specialised agents: planner, research, code, data-analysis, debug, "
+    "writing. When given a task you decompose it into sub-tasks for the "
+    "right team members and synthesise their outputs."
+)
+
+PLAN_DECOMPOSER_SYSTEM = (
+    "You are the EvoScientist orchestrator's planner. Output a strict JSON "
+    "object: {\"steps\": [{\"agent\": <one of: planner|research|code|"
+    "data-analysis|debug|writing>, \"query\": <short imperative prompt for "
+    "that agent>}]}. Aim for 2–4 steps. The first step is usually `planner` "
+    "(produces a plan), the last is usually `writing` (synthesises the "
+    "final answer). Output JSON only, no commentary, no code fences."
+)
+
+
 # ---- MC API helpers --------------------------------------------------------
 
 
@@ -210,10 +265,13 @@ async def run_stub(prompt: str) -> str:
     return f"[evoscientist-bridge stub] received prompt of {len(prompt)} chars; returning canned reply for plumbing test."
 
 
-async def run_openai(prompt: str) -> str:
+async def call_openai(system_prompt: str, user_prompt: str, model: str | None = None) -> str:
+    """Single OpenAI chat-completion call. Reused by the per-subagent and
+    orchestrator paths."""
     if not OPENAI_API_KEY:
         return "[error] OPENAI_API_KEY not set in evoscientist-bridge environment."
-    async with httpx.AsyncClient(timeout=60) as client:
+    chosen = model or EVOSCIENTIST_PRIMARY_MODEL
+    async with httpx.AsyncClient(timeout=120) as client:
         r = await client.post(
             "https://api.openai.com/v1/chat/completions",
             headers={
@@ -221,22 +279,100 @@ async def run_openai(prompt: str) -> str:
                 "Content-Type": "application/json",
             },
             json={
-                "model": EVOSCIENTIST_PRIMARY_MODEL,
+                "model": chosen,
                 "messages": [
-                    {
-                        "role": "system",
-                        "content": "You are EvoScientist (proxy). Answer concisely.",
-                    },
-                    {"role": "user", "content": prompt},
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
                 ],
-                # gpt-5* family rejects `max_tokens`; both gpt-5-nano and
-                # gpt-4o-mini accept `max_completion_tokens`.
-                "max_completion_tokens": 1024,
+                # gpt-5* family rejects `max_tokens`; gpt-5-nano + gpt-4o-mini
+                # both accept `max_completion_tokens`. gpt-5-nano's reasoning
+                # tokens count against this budget, so 4096 leaves room for
+                # both internal reasoning and a meaningful answer.
+                "max_completion_tokens": 4096,
             },
         )
         if r.status_code != 200:
             return f"[openai error {r.status_code}] {r.text[:300]}"
         return r.json()["choices"][0]["message"]["content"]
+
+
+async def run_openai(prompt: str) -> str:
+    """Single-agent fallback path — concise direct answer."""
+    return await call_openai(
+        "You are EvoScientist (proxy). Answer concisely.",
+        prompt,
+    )
+
+
+async def run_subagent(prompt: str, role: str) -> str:
+    """Run a single sub-agent role with its specialised system prompt."""
+    sysprompt = SUBAGENT_SYSTEM_PROMPTS.get(role, ORCHESTRATOR_SYSTEM_PROMPT)
+    return await call_openai(sysprompt, prompt)
+
+
+async def run_team_orchestrator(
+    prompt: str,
+    on_step: Any | None = None,
+) -> str:
+    """Multi-step team-mode pipeline:
+        1. Decomposer → JSON plan of {agent, query} steps.
+        2. Each step runs through that sub-agent's specialised prompt.
+        3. Writer synthesises a final Markdown answer.
+    `on_step(step_index, agent_role, query, result)` callback gets each
+    intermediate step (used to post comments on the MC task)."""
+    # gpt-5-nano often eats the whole token budget on reasoning and returns
+    # an empty completion when asked for structured JSON. The fallback
+    # model (gpt-4o-mini) is much more reliable for the decomposer step
+    # — small cost premium, but the rest of the pipeline runs on the
+    # primary model.
+    plan_raw = await call_openai(
+        PLAN_DECOMPOSER_SYSTEM, prompt, model=EVOSCIENTIST_FALLBACK_MODEL
+    )
+    try:
+        plan_clean = plan_raw.strip().lstrip("`").rstrip("`")
+        if plan_clean.startswith("json"):
+            plan_clean = plan_clean[4:].lstrip("\n")
+        plan = json.loads(plan_clean)
+        steps = plan.get("steps", []) if isinstance(plan, dict) else []
+    except Exception as exc:
+        LOG.warning("plan parse failed: %s — falling back to single-agent", exc)
+        return await run_openai(prompt)
+
+    if not steps:
+        return await run_openai(prompt)
+
+    transcripts: list[str] = []
+    for idx, step in enumerate(steps[:6], start=1):  # safety cap
+        if not isinstance(step, dict):
+            continue
+        agent_role = str(step.get("agent", "")).strip().lower()
+        query = str(step.get("query", "")).strip()
+        if not agent_role or not query:
+            continue
+        contextualised = (
+            f"Original task: {prompt}\n\n"
+            f"Your part of the team plan:\n{query}\n\n"
+            f"Prior team outputs (most recent last):\n"
+            + ("\n---\n".join(transcripts) if transcripts else "(none yet)")
+        )
+        sub_result = await run_subagent(contextualised, agent_role)
+        transcripts.append(f"[{agent_role}] {sub_result}")
+        if on_step:
+            try:
+                await on_step(idx, agent_role, query, sub_result)
+            except Exception as exc:
+                LOG.debug("on_step callback failed: %s", exc)
+
+    if transcripts:
+        synthesis_prompt = (
+            f"Original task: {prompt}\n\n"
+            f"Team transcripts:\n" + "\n\n".join(transcripts) + "\n\n"
+            "Synthesise a single concise final answer that addresses the "
+            "original task. Do not invent new facts beyond what the team "
+            "produced."
+        )
+        return await call_openai(SUBAGENT_SYSTEM_PROMPTS["writing"], synthesis_prompt)
+    return await run_openai(prompt)
 
 
 def run_evoscientist_blocking(prompt: str) -> str:
@@ -290,16 +426,52 @@ BACKENDS = {
 }
 
 
-async def execute_task(task: dict[str, Any]) -> str:
+async def mc_post_comment(client: httpx.AsyncClient, task_id: int | str, text: str) -> None:
+    try:
+        await client.post(
+            f"{MC_URL}/api/tasks/{task_id}/comments",
+            headers=mc_headers(),
+            json={"content": text[:4900]},
+            timeout=15,
+        )
+    except Exception as exc:
+        LOG.debug("comment post failed for task %s: %s", task_id, exc)
+
+
+async def execute_task(task: dict[str, Any], client: httpx.AsyncClient | None = None) -> str:
     prompt = (
         task.get("prompt")
         or task.get("description")
         or task.get("title")
         or json.dumps(task, ensure_ascii=False)[:1000]
     )
+    assigned = (task.get("assigned_to") or "").strip()
+    task_id = task.get("id") or task.get("task_id")
+
+    # Orchestrator path: real team coordination via OpenAI sub-agent prompts.
+    # Trip when MODE allows it (anything other than `stub` or `evoscientist`).
+    if assigned == ORCHESTRATOR_AGENT_NAME and MODE not in {"stub", "evoscientist"}:
+        LOG.info("executing task id=%s via team-orchestrator (6 sub-agents on tap)", task_id)
+        async def _on_step(idx: int, role: str, query: str, result: str) -> None:
+            if client and task_id is not None:
+                comment = (
+                    f"### Step {idx} — {role}\n\n"
+                    f"**Query**\n\n{query}\n\n"
+                    f"**Result**\n\n{result}"
+                )
+                await mc_post_comment(client, task_id, comment)
+        return await run_team_orchestrator(prompt, on_step=_on_step)
+
+    # Direct sub-agent path: assigned to evoscientist-<role>. Use that
+    # role's system prompt so the sub-agent answers in its specialism.
+    if assigned.startswith("evoscientist-") and assigned != ORCHESTRATOR_AGENT_NAME and MODE not in {"stub", "evoscientist"}:
+        role = assigned[len("evoscientist-"):]
+        LOG.info("executing task id=%s via sub-agent role=%s", task_id, role)
+        return await run_subagent(prompt, role)
+
     backend = BACKENDS.get(MODE, run_openai)
     LOG.info("executing task id=%s via mode=%s prompt[0:80]=%r",
-             task.get("id"), MODE, prompt[:80])
+             task_id, MODE, prompt[:80])
     return await backend(prompt)
 
 
@@ -319,10 +491,19 @@ async def poll_loop() -> None:
                     if task_id is None:
                         continue
                     try:
-                        result = await execute_task(task)
+                        result = await execute_task(task, client=client)
                     except Exception as exc:  # never crash the loop
                         result = f"[bridge exception] {exc}"
                         LOG.exception("task %s failed", task_id)
+                    # Post the final answer as a comment so it shows up in
+                    # MC's Comments tab without needing UI changes (the
+                    # `resolution` field exists in the DB but the
+                    # TaskDetailModal doesn't currently render it).
+                    await mc_post_comment(
+                        client,
+                        task_id,
+                        f"### ✅ Final answer ({task.get('assigned_to', 'agent')})\n\n{result}",
+                    )
                     await mc_complete_task(client, task_id, result)
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
@@ -359,7 +540,9 @@ async def healthz() -> dict[str, Any]:
 
 @app.post("/run")
 async def run(payload: dict[str, Any]) -> dict[str, Any]:
-    """Manual smoke-test endpoint — bypass MC, run a prompt directly."""
+    """Manual smoke-test endpoint — bypass MC, run a prompt directly.
+    Pass `assigned_to` to exercise team-orchestrator vs single sub-agent
+    routing without going through the MC task queue."""
     return {"result": await execute_task(payload)}
 
 

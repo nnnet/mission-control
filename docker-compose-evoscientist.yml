@@ -72,7 +72,10 @@ services:
       ORCHESTRATOR_AGENT_NAME: ${ORCHESTRATOR_AGENT_NAME:-evoscientist-orchestrator}
       MODE: ${EVOSCIENTIST_BRIDGE_MODE:-openai}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      POLL_INTERVAL_SECONDS: ${EVOSCIENTIST_POLL_SECONDS:-5}
+      # 7 registered agents × poll = 7 GETs per tick. MC's
+      # `agentTaskLimiter` returns 429 quickly above ~5 polls/sec/IP, so we
+      # space out to 15s by default.
+      POLL_INTERVAL_SECONDS: ${EVOSCIENTIST_POLL_SECONDS:-15}
       TASK_TIMEOUT_SECONDS: ${EVOSCIENTIST_TASK_TIMEOUT_SECONDS:-600}
       LOG_LEVEL: ${EVOSCIENTIST_LOG_LEVEL:-INFO}
     volumes:
