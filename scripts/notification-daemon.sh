@@ -17,6 +17,12 @@ set -e
 
 # Configuration
 MISSION_CONTROL_URL="${MISSION_CONTROL_URL:-http://localhost:3000}"
+# /api/notifications/deliver and /api/notifications (GET stats) require operator
+# role. requireRole() in src/lib/auth.ts accepts an API key via the
+# Authorization: Bearer / x-api-key header. MC_API_KEY is preferred; API_KEY is
+# accepted as a fallback so a single .env value works for both MC and this
+# daemon.
+MC_API_KEY="${MC_API_KEY:-${API_KEY:-}}"
 LOG_DIR="${LOG_DIR:-$HOME/.mission-control/logs}"
 LOG_FILE="$LOG_DIR/notification-daemon-$(date +%Y-%m-%d).log"
 PID_FILE="/tmp/notification-daemon.pid"
@@ -49,6 +55,17 @@ check_mission_control() {
     return 0
 }
 
+# Verify the API key is set; without it, /api/notifications/deliver returns 401
+# silently (the previous implementation had no Authorization header at all).
+check_api_key() {
+    if [[ -z "$MC_API_KEY" ]]; then
+        log "ERROR" "MC_API_KEY (or API_KEY) is not set; /api/notifications/deliver requires operator-role auth"
+        log "ERROR" "Set MC_API_KEY in your environment to the value of API_KEY from Mission Control's .env"
+        return 1
+    fi
+    return 0
+}
+
 # Process and deliver notifications
 deliver_notifications() {
     log "INFO" "Starting notification delivery batch"
@@ -69,6 +86,7 @@ deliver_notifications() {
     response=$(curl -s -w "HTTP_STATUS:%{http_code}" \
         -X POST \
         -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $MC_API_KEY" \
         -d "$api_payload" \
         "$MISSION_CONTROL_URL/api/notifications/deliver" 2>/dev/null)
     
@@ -118,15 +136,23 @@ deliver_notifications() {
 
 # Get delivery statistics
 get_delivery_stats() {
+    if ! check_api_key; then
+        return 1
+    fi
     local stats_url="$MISSION_CONTROL_URL/api/notifications/deliver"
     
     local response
     local curl_ok=false
     if [[ -n "$AGENT_FILTER" ]]; then
         # Use curl --data-urlencode for safe URL parameter encoding
-        response=$(curl -s -G --data-urlencode "agent=$AGENT_FILTER" "$stats_url" 2>/dev/null) && curl_ok=true
+        response=$(curl -s -G \
+            -H "Authorization: Bearer $MC_API_KEY" \
+            --data-urlencode "agent=$AGENT_FILTER" \
+            "$stats_url" 2>/dev/null) && curl_ok=true
     else
-        response=$(curl -s "$stats_url" 2>/dev/null) && curl_ok=true
+        response=$(curl -s \
+            -H "Authorization: Bearer $MC_API_KEY" \
+            "$stats_url" 2>/dev/null) && curl_ok=true
     fi
 
     if [[ "$curl_ok" == "true" ]]; then
@@ -297,7 +323,11 @@ Examples:
   ./notification-daemon.sh --stop
 
 Environment variables:
-  MISSION_CONTROL_URL    Mission Control base URL (default: http://localhost:3005)
+  MISSION_CONTROL_URL    Mission Control base URL (default: http://localhost:3000)
+  MC_API_KEY             API key for /api/notifications/deliver (operator role).
+                         Falls back to API_KEY if MC_API_KEY is not set.
+                         Both endpoints used by this daemon (deliver, stats)
+                         require this header.
 
 Log files:
   $LOG_DIR/notification-daemon-YYYY-MM-DD.log
@@ -322,17 +352,21 @@ main() {
     parse_args "$@"
     validate_args
     
+    if ! check_api_key; then
+        exit 1
+    fi
+
     if [[ "$DAEMON_MODE" == "true" ]]; then
         run_daemon
     else
         # Single run mode
         log "INFO" "Starting single notification delivery run"
-        
+
         if ! check_mission_control; then
             log "ERROR" "Aborting: Mission Control not accessible"
             exit 1
         fi
-        
+
         if deliver_notifications; then
             log "INFO" "Notification delivery completed successfully"
             exit 0
